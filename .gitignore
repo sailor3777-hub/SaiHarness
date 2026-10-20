@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Runtime data: SQLite DB, crash log, saved connections with API keys
+data/
+data_backup/
+
+# Manual test sandbox (scripts/make_test_sandbox.ps1)
+test_sandbox/
+
+# Secrets and local config
+.env
+*.env
+*.local.*
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
+.DS_Store
