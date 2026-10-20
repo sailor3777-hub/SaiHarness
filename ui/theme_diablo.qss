@@ -1,0 +1,39 @@
+/* Diablo: уголь и запёкшаяся кровь, золото рамок, пергаментный текст, засечный шрифт */
+* {
+    background-color: #0b0605;
+    color: #d8c8a0;
+    font-family: "Palatino Linotype", "Book Antiqua", Georgia, serif;
+    font-size: 15px;
+}
+QSplitter::handle { background-color: #5a3a14; width: 2px; }
+QListWidget, QTextEdit, QPlainTextEdit, QTreeWidget, QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+    background-color: #130a07;
+    border: 2px solid #5a3a14;
+    selection-background-color: #5c1010;
+    selection-color: #ffd98a;
+}
+QComboBox QAbstractItemView { background-color: #130a07; border: 1px solid #8a6a2a; selection-background-color: #5c1010; selection-color: #ffd98a; }
+QListWidget::item { padding: 6px; border-bottom: 1px solid #2a1810; }
+QListWidget::item:selected, QTreeWidget::item:selected { background-color: #3f0c0c; color: #ffcc66; }
+QPushButton {
+    border: 2px solid #8a6a2a;
+    padding: 6px 14px;
+    color: #f0d890;
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4a0e0e, stop:1 #200606);
+}
+QPushButton:hover {
+    border-color: #d4a840;
+    color: #fff0b8;
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #6e1414, stop:1 #340a0a);
+}
+QPushButton:pressed { background-color: #1a0505; }
+QPushButton:disabled { color: #6a5a40; border-color: #3a2a14; background-color: #150a08; }
+QTabWidget::pane { border: 2px solid #5a3a14; }
+QTabBar::tab { padding: 6px 10px; border: 1px solid #5a3a14; background-color: #170b08; color: #a89870; }
+QTabBar::tab:selected { background-color: #3a0c0c; color: #ffd98a; border-bottom: 2px solid #d4a840; }
+QLabel#status { color: #8a7650; }
+QLabel#title { font-weight: bold; color: #d4a840; padding: 4px; }
+QScrollBar:vertical { width: 12px; background-color: #130a07; }
+QScrollBar::handle:vertical { background: #5c1a1a; border: 1px solid #8a6a2a; min-height: 24px; }
+QToolTip { background-color: #1a0a08; color: #f0d890; border: 1px solid #d4a840; }
+QMessageBox, QDialog { background-color: #0b0605; }

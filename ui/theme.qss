@@ -1,0 +1,22 @@
+* {
+    background-color: #000000;
+    color: #ffffff;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 14px;
+}
+QSplitter::handle { background-color: #2a2a2a; width: 1px; }
+QListWidget, QTextEdit, QPlainTextEdit, QTreeWidget, QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+    border: 1px solid #2a2a2a;
+    selection-background-color: #333333;
+}
+QListWidget::item { padding: 6px; }
+QListWidget::item:selected, QTreeWidget::item:selected { background-color: #222222; color: #ffd54a; }
+QPushButton { border: 1px solid #444444; padding: 6px 12px; }
+QPushButton:hover { background-color: #1c1c1c; }
+QTabWidget::pane { border: 1px solid #2a2a2a; }
+QTabBar::tab { padding: 6px 8px; border: 1px solid #2a2a2a; }
+QTabBar::tab:selected { background-color: #1c1c1c; }
+QLabel#status { color: #8a8a8a; }
+QLabel#title { font-weight: bold; color: #aaaaaa; padding: 4px; }
+QScrollBar:vertical { width: 10px; }
+QScrollBar::handle:vertical { background: #333333; min-height: 24px; }
