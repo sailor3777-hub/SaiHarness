@@ -1,8 +1,8 @@
-"""Клиент MCP: запуск серверов из конфига, список их инструментов и вызовы.
+"""MCP client: starts servers from the config, lists their tools and makes calls.
 
-Все серверы живут в одном фоновом потоке с циклом asyncio. Каждый сервер обслуживает отдельная
-долгая задача: контексты stdio_client/ClientSession (anyio) нужно входить и выходить в одной задаче.
-Публичные методы блокирующие и потокобезопасные: их зовут из рабочих потоков, не из GUI.
+All servers live in one background thread with an asyncio loop. Each server is served by a separate
+long-lived task: the stdio_client/ClientSession (anyio) contexts must be entered and exited in the same task.
+Public methods are blocking and thread-safe: they are called from worker threads, not from the GUI.
 """
 import asyncio
 import json
@@ -44,7 +44,7 @@ class ServerState:
 
 
 def default_config(db_path: Path) -> dict:
-    """Конфиг по умолчанию: встроенный сервер toolbox (формат как у Claude Desktop)."""
+    """The default config: the built-in toolbox server (same format as Claude Desktop)."""
     return {
         "mcpServers": {
             "toolbox": {
@@ -58,7 +58,7 @@ def default_config(db_path: Path) -> dict:
 
 
 def load_config(path: Path, db_path: Path) -> dict:
-    """Читает конфиг; если файла нет, создаёт его с сервером по умолчанию."""
+    """Reads the config; if there is no file, creates it with the default server."""
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(default_config(db_path), ensure_ascii=False, indent=2), encoding="utf-8")
@@ -66,16 +66,16 @@ def load_config(path: Path, db_path: Path) -> dict:
 
 
 def _server_env(extra: dict | None) -> dict[str, str]:
-    """Окружение сервера: всё окружение приложения плюс env из конфига.
-    Без этого mcp отдаёт серверу урезанный набор (нет windir, ProgramData, PSModulePath, COMPUTERNAME…),
-    и PowerShell из shell_run не видит модуль Hyper-V: Get-VM пуст, Get-VMSwitch «Der Wert darf nicht NULL sein»."""
+    """The server's environment: the whole app environment plus env from the config.
+    Without this, mcp gives the server a trimmed set (no windir, ProgramData, PSModulePath, COMPUTERNAME…),
+    and PowerShell in shell_run does not see the Hyper-V module: Get-VM is empty, Get-VMSwitch fails with "Der Wert darf nicht NULL sein"."""
     env = dict(os.environ)
     env.update({str(k): str(v) for k, v in (extra or {}).items()})
     return env
 
 
 def _root_cause(exc: BaseException) -> str:
-    """Самая глубокая причина из ExceptionGroup (anyio оборачивает ошибки в группы)."""
+    """The deepest cause from an ExceptionGroup (anyio wraps errors in groups)."""
     while isinstance(exc, BaseExceptionGroup) and exc.exceptions:
         exc = exc.exceptions[0]
     return f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
@@ -87,7 +87,7 @@ def _result_text(result) -> tuple[str, bool]:
         if isinstance(block, mcp_types.TextContent):
             parts.append(block.text)
         else:
-            parts.append(f"[{getattr(block, 'type', 'данные')}: нетекстовый результат пропущен]")
+            parts.append(f"[{getattr(block, 'type', 'data')}: non-text result skipped]")
     text = "\n".join(parts)
     structured = getattr(result, "structured_content", None)
     if not text and structured:
@@ -106,7 +106,7 @@ class McpManager:
         self.states: dict[str, ServerState] = {}
         self._log_dir = log_dir
 
-    # --- поток с циклом ---
+    # --- the loop thread ---
 
     def _ensure_loop(self) -> asyncio.AbstractEventLoop:
         with self._lock:
@@ -128,10 +128,10 @@ class McpManager:
     def _run(self, coro, timeout: float | None):
         return asyncio.run_coroutine_threadsafe(coro, self._ensure_loop()).result(timeout)
 
-    # --- серверы ---
+    # --- servers ---
 
     def connect_all(self, config: dict) -> dict[str, ServerState]:
-        """(Пере)подключает все серверы из конфига. Ошибки отдельных серверов не прерывают остальные."""
+        """(Re)connects all servers from the config. Errors of individual servers do not stop the others."""
         self.close_servers()
         servers = (config or {}).get("mcpServers") or {}
         return self._run(self._connect_all(servers), CONNECT_TIMEOUT * max(1, len(servers)) + 5)
@@ -144,7 +144,7 @@ class McpManager:
             state = ServerState(name)
             self.states[name] = state
             if not isinstance(spec, dict) or not spec.get("command"):
-                state.status, state.error = "error", "в конфиге нет поля command"
+                state.status, state.error = "error", "the config has no command field"
                 continue
             if spec.get("disabled"):
                 state.status = "disabled"
@@ -179,11 +179,11 @@ class McpManager:
                     await self._stops[name].wait()
         except asyncio.CancelledError:
             raise
-        except BaseException as e:  # noqa: BLE001: ошибка сервера не должна ронять обвязку
+        except BaseException as e:  # noqa: BLE001: a server error must not bring down the harness
             if state.status != "ready" or not ready.done():
                 state.status, state.error = "error", _root_cause(e)
             else:
-                state.status, state.error = "error", f"сервер завершился: {_root_cause(e)}"
+                state.status, state.error = "error", f"the server exited: {_root_cause(e)}"
         finally:
             self._sessions.pop(name, None)
             if errlog:
@@ -212,7 +212,7 @@ class McpManager:
                 return tools
 
     def close_servers(self):
-        """Останавливает все серверы (и их процессы)."""
+        """Stops all servers (and their processes)."""
         if self._loop is None or not self._tasks:
             return
         self._run(self._close_servers(), 15)
@@ -236,26 +236,26 @@ class McpManager:
         if self._loop is not None:
             self._loop.call_soon_threadsafe(self._loop.stop)
 
-    # --- вызовы ---
+    # --- calls ---
 
     def all_tools(self) -> list[ToolInfo]:
         return [t for s in self.states.values() if s.status == "ready" for t in s.tools]
 
     def call(self, server: str, tool: str, arguments: dict | None, timeout: float = DEFAULT_CALL_TIMEOUT
              ) -> tuple[str, bool]:
-        """Вызывает инструмент. Возвращает (текст, это_ошибка). Блокирующий, вызывать из рабочего потока."""
+        """Calls a tool. Returns (text, is_error). Blocking; call from a worker thread."""
         try:
             return self._run(self._call(server, tool, arguments or {}, timeout), timeout + 5)
         except (TimeoutError, asyncio.TimeoutError):
-            return f"Инструмент не ответил за {timeout:g} с", True
+            return f"The tool did not answer within {timeout:g} s", True
         except Exception as e:  # noqa: BLE001
-            return f"Сбой вызова: {_root_cause(e)}", True
+            return f"Call failed: {_root_cause(e)}", True
 
     async def _call(self, server: str, tool: str, arguments: dict, timeout: float) -> tuple[str, bool]:
         session = self._sessions.get(server)
         if session is None:
             state = self.states.get(server)
             why = f": {state.error}" if state and state.error else ""
-            return f"Сервер «{server}» не подключён{why}", True
+            return f"Server \"{server}\" is not connected{why}", True
         result = await asyncio.wait_for(session.call_tool(tool, arguments), timeout)
         return _result_text(result)

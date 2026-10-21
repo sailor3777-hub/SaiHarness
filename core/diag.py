@@ -1,10 +1,10 @@
-"""Диагностика: лог вылетов и необработанных ошибок в data/crash.log.
+"""Diagnostics: a log of crashes and unhandled errors in data/crash.log.
 
-Если приложение закрылось молча (вылет на уровне Qt/C++), в логе будет трасса от faulthandler.
-Запуск пишет «=== start <время> pid=N», штатный выход «=== exit <время> pid=N». Номер процесса нужен,
-потому что приложение можно запустить дважды одновременно, и тогда записи двух запусков перемешиваются.
-При следующем запуске для каждого старта без выхода, чей процесс уже не существует, дописывается
-«=== lost …»: это и есть аварийное завершение (процесс убили или он упал без трассы).
+If the app closed silently (a crash at the Qt/C++ level), the log has a faulthandler trace.
+A start writes "=== start <time> pid=N", a normal exit "=== exit <time> pid=N". The process id is needed
+because the app can be started twice at once, and then the entries of the two runs get mixed.
+On the next start, for every start without an exit whose process no longer exists,
+"=== lost …" is appended: that is the abnormal termination (the process was killed or crashed without a trace).
 """
 import atexit
 import ctypes
@@ -19,7 +19,7 @@ from pathlib import Path
 
 from PySide6.QtCore import qInstallMessageHandler
 
-MAX_LOG_BYTES = 512 * 1024   # больше этого размера лог усекается при запуске
+MAX_LOG_BYTES = 512 * 1024   # beyond this size the log is truncated at startup
 KEEP_TAIL_BYTES = 256 * 1024
 _START = re.compile(r"^=== start (\S+)(?: pid=(\d+))?")
 _CLOSE = re.compile(r"^=== (?:exit|lost) (\S+)(?: pid=(\d+))?")
@@ -37,13 +37,13 @@ def _now() -> str:
 
 
 def note(text: str):
-    """Строка в лог (если диагностика установлена). Пишется перед рискованными действиями, чтобы после
-    молчаливого вылета было видно, что происходило последним."""
+    """A line in the log (if diagnostics are installed). Written before risky actions so that after
+    a silent crash it is clear what happened last."""
     _write(f"[{_now()}] {text}")
 
 
 def memory_summary() -> str:
-    """Память процесса и системы одной строкой (только Windows; иначе пусто)."""
+    """Process and system memory in one line (Windows only; empty otherwise)."""
     if os.name != "nt":
         return ""
     try:
@@ -69,19 +69,19 @@ def memory_summary() -> str:
         proc.cb = ctypes.sizeof(proc)
         kernel32.GetCurrentProcess.restype = ctypes.c_void_p
         kernel32.K32GetProcessMemoryInfo(ctypes.c_void_p(kernel32.GetCurrentProcess()), ctypes.byref(proc), proc.cb)
-        return (f"rss={proc.WorkingSetSize / 2**20:.0f}МБ ram_свободно={status.ullAvailPhys / 2**30:.1f}ГБ "
-                f"из {status.ullTotalPhys / 2**30:.0f}ГБ нагрузка={status.dwMemoryLoad}%")
-    except Exception:  # диагностика не должна ломать работу
+        return (f"rss={proc.WorkingSetSize / 2**20:.0f}MB ram_free={status.ullAvailPhys / 2**30:.1f}GB "
+                f"of {status.ullTotalPhys / 2**30:.0f}GB load={status.dwMemoryLoad}%")
+    except Exception:  # diagnostics must not break anything
         return ""
 
 
 def pid_alive(pid: int) -> bool:
-    """Существует ли ещё процесс с таким номером."""
+    """Whether a process with this id still exists."""
     if os.name == "nt":
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
         if not handle:
-            return ctypes.get_last_error() == 5  # доступ запрещён: процесс есть, просто чужой
+            return ctypes.get_last_error() == 5  # access denied: the process exists, it just belongs to someone else
         code = ctypes.c_ulong()
         ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
         kernel32.CloseHandle(handle)
@@ -96,7 +96,7 @@ def pid_alive(pid: int) -> bool:
 
 
 def unclean_runs(text: str) -> list[tuple[int, str]]:
-    """Старты с номером процесса, у которых нет парного выхода: [(pid, время старта)]. Записи без pid (старый формат) пропускаются."""
+    """Starts with a process id that have no matching exit: [(pid, start time)]. Entries without pid (old format) are skipped."""
     open_runs: dict[int, str] = {}
     for line in text.splitlines():
         m = _START.match(line)
@@ -110,7 +110,7 @@ def unclean_runs(text: str) -> list[tuple[int, str]]:
 
 
 def _rotate(path: Path):
-    """Слишком большой лог усекается до хвоста (начиная с целой строки)."""
+    """A log that is too large is truncated to its tail (starting at a whole line)."""
     try:
         if path.stat().st_size <= MAX_LOG_BYTES:
             return
@@ -131,7 +131,7 @@ def install(path: Path):
     _write("")
     for old_pid, started in unclean_runs(previous):
         if old_pid != pid and not pid_alive(old_pid):
-            _write(f"=== lost {_now()} pid={old_pid}  (запуск {started} не завершился штатно: процесса уже нет)")
+            _write(f"=== lost {_now()} pid={old_pid}  (the run started {started} did not end normally: the process is gone)")
     _write(f"=== start {_now()} pid={pid}")
     faulthandler.enable(file=_log, all_threads=True)
     atexit.register(lambda: _write(f"=== exit {_now()} pid={pid}"))
@@ -145,7 +145,7 @@ def install(path: Path):
 
     def qt_handler(_mode, _context, message):
         _write(f"[qt] {message}")
-        if sys.stderr is not None:  # под pythonw потока ошибок нет; исключение здесь ломает то, что Qt делает в этот момент
+        if sys.stderr is not None:  # under pythonw there is no error stream; an exception here breaks whatever Qt is doing at that moment
             try:
                 sys.stderr.write(message + "\n")
             except (OSError, ValueError):

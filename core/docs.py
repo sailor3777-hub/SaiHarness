@@ -1,16 +1,18 @@
-"""Текст из PDF, Word и Excel для инструмента fs_read (чистый Python, без Qt).
+"""Text from PDF, Word and Excel for the fs_read tool (pure Python, no Qt).
 
-read_document(path) возвращает (текст, '') или (None, причина). Форматы: .pdf (pypdf), .docx (python-docx),
-.xlsx/.xlsm (openpyxl). Старые .doc/.xls не поддерживаются. Результат не режется по размеру модели:
-это делает вызывающий код (fs_read отдаёт текст кусками через offset).
+read_document(path) returns (text, '') or (None, reason). Formats: .pdf (pypdf), .docx (python-docx),
+.xlsx/.xlsm (openpyxl). Old .doc/.xls are not supported. The result is not cut to the model's size:
+the caller does that (fs_read returns the text in chunks with offset).
 """
 import os
 import threading
 from collections import OrderedDict
 
+from core.markers import NOT_FOUND
+
 DOC_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".xlsm"}
-MAX_DOC_BYTES = 30_000_000     # файл крупнее не открываем
-MAX_DOC_CHARS = 2_000_000      # дальше текст не извлекаем
+MAX_DOC_BYTES = 30_000_000     # a larger file is not opened
+MAX_DOC_CHARS = 2_000_000      # no text is extracted beyond this
 MAX_SHEET_ROWS = 20_000
 
 
@@ -19,7 +21,7 @@ def is_document_name(name: str) -> bool:
 
 
 class _Out:
-    """Накопитель текста с предельным объёмом."""
+    """A text accumulator with a size limit."""
 
     def __init__(self):
         self.parts: list[str] = []
@@ -38,7 +40,7 @@ class _Out:
     def text(self) -> str:
         t = "\n".join(self.parts)
         if self.full:
-            t = t[:MAX_DOC_CHARS] + f"\n[документ длиннее {MAX_DOC_CHARS} символов, остальное не извлечено]"
+            t = t[:MAX_DOC_CHARS] + f"\n[the document is longer than {MAX_DOC_CHARS} characters, the rest was not extracted]"
         return t
 
 
@@ -49,23 +51,23 @@ def _read_pdf(path: str) -> tuple[str | None, str]:
         reader = PdfReader(path)
         if reader.is_encrypted:
             try:
-                ok = reader.decrypt("")  # PDF с пустым паролем открывается без вопросов
+                ok = reader.decrypt("")  # a PDF with an empty password opens without asking
             except Exception:
                 ok = 0
             if not ok:
-                return None, "PDF защищён паролем"
+                return None, "the PDF is password protected"
         out = _Out()
         pages = len(reader.pages)
         has_text = False
         for i, page in enumerate(reader.pages, 1):
             text = (page.extract_text() or "").strip()
             has_text = has_text or bool(text)
-            if not out.add(f"--- стр. {i} из {pages} ---\n{text}" if text else f"--- стр. {i} из {pages} --- (текста нет)"):
+            if not out.add(f"--- page {i} of {pages} ---\n{text}" if text else f"--- page {i} of {pages} --- (no text)"):
                 break
     except PdfReadError as e:
-        return None, f"PDF повреждён ({e})"
+        return None, f"the PDF is damaged ({e})"
     if not has_text:
-        return None, "в PDF нет текстового слоя (похоже на скан), прочитать его как текст нельзя"
+        return None, "the PDF has no text layer (looks like a scan), it cannot be read as text"
     return out.text(), ""
 
 
@@ -84,7 +86,7 @@ def _read_docx(path: str) -> tuple[str | None, str]:
     try:
         document = docx.Document(path)
     except Exception as e:
-        return None, f"не открывается как Word ({type(e).__name__})"
+        return None, f"does not open as Word ({type(e).__name__})"
     out = _Out()
     for child in document.element.body.iterchildren():
         tag = child.tag.rsplit("}", 1)[-1]
@@ -94,6 +96,7 @@ def _read_docx(path: str) -> tuple[str | None, str]:
             if not text:
                 continue
             style = (para.style.name or "") if para.style is not None else ""
+            # style names are checked in English and Russian: files saved by a Russian Word keep localized names
             if style.startswith(("Heading", "Заголовок")):
                 digits = "".join(c for c in style if c.isdigit())
                 text = "#" * (int(digits) if digits else 1) + " " + text
@@ -109,7 +112,7 @@ def _read_docx(path: str) -> tuple[str | None, str]:
             for row in table.rows:
                 cells, last_tc = [], None
                 for c in row.cells:
-                    if c._tc is not last_tc:  # объединённая ячейка повторяется в row.cells
+                    if c._tc is not last_tc:  # a merged cell repeats in row.cells
                         cells.append(_cell(c.text.strip()))
                         last_tc = c._tc
                 ok = out.add(" | ".join(cells))
@@ -126,12 +129,12 @@ def _read_xlsx(path: str) -> tuple[str | None, str]:
     try:
         wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     except Exception as e:
-        return None, f"не открывается как Excel ({type(e).__name__})"
+        return None, f"does not open as Excel ({type(e).__name__})"
     out = _Out()
     try:
         for ws in wb.worksheets:
             rows = 0
-            if not out.add(f"=== Лист «{ws.title}» ==="):
+            if not out.add(f"=== Sheet \"{ws.title}\" ==="):
                 break
             for row in ws.iter_rows(values_only=True):
                 cells = [_cell(v) for v in row]
@@ -141,7 +144,7 @@ def _read_xlsx(path: str) -> tuple[str | None, str]:
                     continue
                 rows += 1
                 if rows > MAX_SHEET_ROWS:
-                    out.add(f"[строк больше {MAX_SHEET_ROWS}, остальные не извлечены]")
+                    out.add(f"[more than {MAX_SHEET_ROWS} rows, the rest were not extracted]")
                     break
                 if not out.add("\t".join(cells)):
                     break
@@ -156,25 +159,25 @@ _READERS = {".pdf": _read_pdf, ".docx": _read_docx, ".xlsx": _read_xlsx, ".xlsm"
 
 
 def read_document(path: str) -> tuple[str | None, str]:
-    """Текст документа или (None, причина). Формулы Excel отдаются последним сохранённым значением."""
+    """Document text or (None, reason). Excel formulas are given as the last saved value."""
     ext = os.path.splitext(path)[1].lower()
     reader = _READERS.get(ext)
     if reader is None:
-        return None, "формат не поддерживается"
+        return None, "format not supported"
     try:
         size = os.path.getsize(path)
     except FileNotFoundError:
-        return None, "файл не найден"
+        return None, NOT_FOUND
     except OSError:
-        return None, "нет доступа к файлу"
+        return None, "no access to the file"
     if size > MAX_DOC_BYTES:
-        return None, f"слишком большой ({size // 1024 // 1024} МБ)"
+        return None, f"too large ({size // 1024 // 1024} MB)"
     try:
         return reader(path)
     except PermissionError:
-        return None, "нет доступа к файлу"
-    except Exception as e:  # битые файлы дают самые разные исключения библиотек
-        return None, f"не удалось прочитать ({type(e).__name__})"
+        return None, "no access to the file"
+    except Exception as e:  # broken files raise all kinds of library exceptions
+        return None, f"could not be read ({type(e).__name__})"
 
 
 _cache: "OrderedDict[tuple, tuple[str | None, str]]" = OrderedDict()
@@ -183,7 +186,7 @@ _CACHE_SIZE = 8
 
 
 def read_document_cached(path: str) -> tuple[str | None, str]:
-    """read_document с кешем по (путь, время изменения, размер): панель «Файлы» читает выбор при каждой сводке и отправке."""
+    """read_document cached by (path, modification time, size): the Files panel reads the selection on every summary and send."""
     try:
         st = os.stat(path)
     except OSError:

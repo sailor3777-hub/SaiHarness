@@ -1,4 +1,4 @@
-"""Загрузка страниц: проверка адресов на каждом переходе, лимит размера, robots.txt, пауза между запросами, кэш на диске."""
+"""Page loading: address checks on every hop, a size limit, robots.txt, a pause between requests, a disk cache."""
 import hashlib
 import json
 import socket
@@ -16,12 +16,12 @@ from core.web.safety import UnsafeUrl, check_url
 USER_AGENT = "SaiHarness/1.0 (+local agent harness)"
 MAX_BYTES = 2_000_000
 MAX_REDIRECTS = 5
-MIN_STATIC_CHARS = 80      # почти пустая страница со скриптами — её рисует JavaScript (SPA дают 0; example.com — 156, это не SPA)
+MIN_STATIC_CHARS = 80      # an almost empty page with scripts is drawn by JavaScript (SPAs give 0; example.com gives 156, not an SPA)
 TEXT_TYPES = ("text/html", "application/xhtml", "text/plain", "application/xml", "text/xml")
 
 
 class FetchError(Exception):
-    """Страницу не удалось получить; текст ошибки показывается модели."""
+    """The page could not be fetched; the error text is shown to the model."""
 
 
 @dataclass
@@ -47,13 +47,13 @@ class WebFetcher:
         self.transport = transport
         self.resolve = resolve
         self.delay = delay
-        self.renderer = renderer  # callable(url) -> html; None — страницы с JS не рисуются
+        self.renderer = renderer  # callable(url) -> html; None means JS pages are not rendered
         self.clock, self.sleep = clock, sleep
         self.timeout = timeout
         self._last_hit: dict[str, float] = {}
         self._robots: dict[str, RobotFileParser | None] = {}
 
-    # --- сеть ---
+    # --- network ---
 
     def _check(self, url: str) -> str:
         try:
@@ -71,7 +71,7 @@ class WebFetcher:
         return httpx.Client(transport=self.transport, timeout=self.timeout, follow_redirects=False, trust_env=False)
 
     def _get(self, client: httpx.Client, url: str) -> tuple[httpx.Response, bytes, str]:
-        """GET с ручными редиректами: каждый переход проверяется заново. Возвращает (ответ, тело, итоговый URL)."""
+        """GET with manual redirects: every hop is checked again. Returns (response, body, final URL)."""
         headers = {"User-Agent": USER_AGENT, "Accept": "text/html,text/plain;q=0.9,*/*;q=0.1",
                    "Accept-Language": "ru,en;q=0.8"}
         for _ in range(MAX_REDIRECTS + 1):
@@ -89,10 +89,10 @@ class WebFetcher:
                             break
                     return r, bytes(body[:MAX_BYTES]), url
             except httpx.TimeoutException:
-                raise FetchError(f"Таймаут при загрузке {url}") from None
+                raise FetchError(f"Timeout while loading {url}") from None
             except httpx.HTTPError as e:
-                raise FetchError(f"Ошибка сети при загрузке {url}: {e.__class__.__name__}") from None
-        raise FetchError(f"Слишком много перенаправлений (больше {MAX_REDIRECTS})")
+                raise FetchError(f"Network error while loading {url}: {e.__class__.__name__}") from None
+        raise FetchError(f"Too many redirects (more than {MAX_REDIRECTS})")
 
     # --- robots.txt ---
 
@@ -113,7 +113,7 @@ class WebFetcher:
         parser = self._robots[origin]
         return True if parser is None else parser.can_fetch(USER_AGENT, url)
 
-    # --- кэш ---
+    # --- cache ---
 
     def _cache_file(self, url: str) -> Path | None:
         return self.cache_dir / (hashlib.sha1(url.encode("utf-8")).hexdigest() + ".json") if self.cache_dir else None
@@ -132,7 +132,7 @@ class WebFetcher:
 
     def _cache_put(self, url: str, page: Fetched):
         f = self._cache_file(url)
-        if not f or self.allow_private:  # локальные адреса не кэшируем
+        if not f or self.allow_private:  # local addresses are not cached
             return
         try:
             f.parent.mkdir(parents=True, exist_ok=True)
@@ -141,7 +141,7 @@ class WebFetcher:
         except OSError:
             pass
 
-    # --- публичный метод ---
+    # --- public method ---
 
     def fetch(self, url: str, render: bool = False, use_cache: bool = True, robots: bool = False) -> Fetched:
         url = self._check(url)
@@ -150,16 +150,16 @@ class WebFetcher:
             if hit:
                 return hit
         if robots and not self.robots_allowed(url):
-            raise FetchError(f"robots.txt сайта запрещает загрузку {url}")
+            raise FetchError(f"The site's robots.txt forbids loading {url}")
         html, final_url, rendered, render_error = "", url, False, ""
         if not render:
             with self._client() as client:
                 r, body, final_url = self._get(client, url)
             if r.status_code >= 400:
-                raise FetchError(f"Сайт ответил {r.status_code} на {url}")
+                raise FetchError(f"The site answered {r.status_code} for {url}")
             ctype = r.headers.get("content-type", "text/html").split(";")[0].strip().lower()
             if not ctype.startswith(TEXT_TYPES):
-                raise FetchError(f"Тип содержимого {ctype} не поддерживается (нужен текст или HTML)")
+                raise FetchError(f"Content type {ctype} is not supported (text or HTML is required)")
             html = body.decode(r.charset_encoding or "utf-8", "replace")
             if ctype in ("text/plain", "application/xml", "text/xml"):
                 page = Fetched(url, final_url, "", html.strip())
@@ -168,17 +168,17 @@ class WebFetcher:
         if render or self._looks_js_only(html):
             if self.renderer is None:
                 if render:
-                    raise FetchError("Отрисовка JavaScript недоступна (Qt WebEngine не подключён)")
+                    raise FetchError("JavaScript rendering is unavailable (Qt WebEngine is not available)")
             else:
                 try:
                     html, rendered = self.renderer(final_url), True
-                except Exception as e:  # рендерер — отдельный процесс; его поломка не должна ронять чтение
+                except Exception as e:  # the renderer is a separate process; its failure must not break reading
                     if render:
-                        raise FetchError(f"Не удалось отрисовать страницу: {e}") from None
+                        raise FetchError(f"Could not render the page: {e}") from None
                     render_error = str(e)
         parsed = extract(html, final_url)
         page = Fetched(url, final_url, parsed.title, parsed.text, parsed.links, False, rendered, render_error)
-        if not render_error:  # неудачную отрисовку не кэшируем: в следующий раз стоит попробовать снова
+        if not render_error:  # a failed render is not cached: next time it is worth trying again
             self._cache_put(url, page)
         return page
 

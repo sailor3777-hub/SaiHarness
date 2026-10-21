@@ -1,7 +1,7 @@
-"""Темы оформления: QSS для окна плюс цвета, которые код задаёт сам (HTML чата, строки деревьев).
+"""Themes: QSS for the window plus the colors the code sets itself (chat HTML, tree rows).
 
-Тема хранится в app_settings (ключ theme). current() отдаёт активную тему; apply() применяет её к приложению и
-сообщает подписчикам через bus.changed, чтобы чат и панели перекрасились без перезапуска.
+The theme is stored in app_settings (key theme). current() returns the active theme; apply() applies it to the app and
+notifies subscribers through bus.changed so that the chat and panels are recolored without a restart.
 """
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,14 +20,14 @@ class Theme:
     key: str
     title: str
     qss_file: str
-    user: str          # подпись «Вы»
-    assistant: str     # подпись «Модель»
+    user: str          # the "You" label
+    assistant: str     # the "Model" label
     system: str
-    reasoning: str     # размышления и приглушённый текст
+    reasoning: str     # reasoning and muted text
     tool: str
     tool_error: str
-    dim: str           # недоступные и служебные строки деревьев
-    normal: str        # обычный цвет строки с токенами
+    dim: str           # unavailable and service tree rows
+    normal: str        # the usual color of a row with tokens
     warn: str
     over: str
     code_bg: str
@@ -41,7 +41,7 @@ class Theme:
         return (UI_DIR / self.qss_file).read_text(encoding="utf-8")
 
     def richtext_css(self) -> str:
-        """Стили для QTextDocument.setDefaultStyleSheet: Qt понимает только простые селекторы по тегам."""
+        """Styles for QTextDocument.setDefaultStyleSheet: Qt understands only simple tag selectors."""
         return (
             f"pre {{ background-color: {self.code_bg}; color: {self.code_fg}; font-family: Consolas, monospace; }}\n"
             f"code {{ background-color: {self.code_bg}; color: {self.inline_code}; font-family: Consolas, monospace; }}\n"
@@ -52,13 +52,13 @@ class Theme:
 
 
 DARK = Theme(
-    "dark", "Тёмная", "theme.qss",
+    "dark", "Dark", "theme.qss",
     user="#8ab4f8", assistant="#81c995", system="#aaaaaa", reasoning="#8a8a8a", tool="#d7ba7d", tool_error="#ff6b6b",
     dim="#666666", normal="#8a8a8a", warn="#ffd54a", over="#ff6b6b",
     code_bg="#141414", code_fg="#e6e6e6", inline_code="#f0c674", link="#8ab4f8", table_head="#1c1c1c", quote="#aaaaaa",
 )
 LIGHT = Theme(
-    "light", "Светлая", "theme_light.qss",
+    "light", "Light", "theme_light.qss",
     user="#1a56c4", assistant="#1b7a3a", system="#666666", reasoning="#777777", tool="#8a6200", tool_error="#c62828",
     dim="#9a9a9a", normal="#666666", warn="#b26a00", over="#c62828",
     code_bg="#eceff1", code_fg="#202124", inline_code="#a0521d", link="#1a56c4", table_head="#e3e6ea", quote="#555555",
@@ -74,7 +74,7 @@ DEFAULT_KEY = DARK.key
 
 
 class _Bus(QObject):
-    changed = Signal(object)  # новая Theme
+    changed = Signal(object)  # the new Theme
 
 
 bus = _Bus()
@@ -91,7 +91,7 @@ def saved_key() -> str:
 
 
 def apply(key: str, save: bool = True) -> Theme:
-    """Делает тему активной: стиль приложения, настройка в базе, сигнал подписчикам."""
+    """Makes a theme active: the app style, the database setting, a signal to subscribers."""
     global _current
     _current = THEMES.get(key, DARK)
     app = QApplication.instance()

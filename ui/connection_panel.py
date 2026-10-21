@@ -10,7 +10,7 @@ from worker import ModelListRequest
 
 
 class ConnectionPanel(QWidget):
-    """Список подключений к серверам моделей и форма их настройки."""
+    """The list of connections to model servers and the form to set them up."""
 
     changed = Signal()
 
@@ -19,27 +19,27 @@ class ConnectionPanel(QWidget):
         self._editing: str | None = None
 
         self.list = QListWidget()
-        self.edit_btn = QPushButton("Изменить")
-        self.delete_btn = QPushButton("Удалить")
-        self.new_btn = QPushButton("Новое")
+        self.edit_btn = QPushButton("Edit")
+        self.delete_btn = QPushButton("Delete")
+        self.new_btn = QPushButton("New")
         buttons = QHBoxLayout()
         buttons.addWidget(self.new_btn)
         buttons.addWidget(self.edit_btn)
         buttons.addWidget(self.delete_btn)
 
         self.name = QLineEdit()
-        self.name.setPlaceholderText("Имя подключения")
+        self.name.setPlaceholderText("Connection name")
         self.kind = QComboBox()
         self.kind.addItems(KINDS)
         self.url = QLineEdit()
-        self.url.setPlaceholderText("URL или IP, например 192.168.1.5:1234")
+        self.url.setPlaceholderText("URL or IP, for example 192.168.1.5:1234")
         self.api_key = QLineEdit()
         self.api_key.setEchoMode(QLineEdit.Password)
-        self.api_key.setPlaceholderText("API-ключ (необязательно)")
+        self.api_key.setPlaceholderText("API key (optional)")
         self.status = QLabel("")
         self.status.setWordWrap(True)
-        self.save_btn = QPushButton("Сохранить")
-        self.check_btn = QPushButton("Проверить")
+        self.save_btn = QPushButton("Save")
+        self.check_btn = QPushButton("Check")
         self.check_req = ModelListRequest(self)
 
         form_buttons = QHBoxLayout()
@@ -47,10 +47,10 @@ class ConnectionPanel(QWidget):
         form_buttons.addWidget(self.save_btn)
 
         form = QFormLayout()
-        form.addRow("Имя", self.name)
-        form.addRow("Тип", self.kind)
+        form.addRow("Name", self.name)
+        form.addRow("Type", self.kind)
         form.addRow("URL / IP", self.url)
-        form.addRow("Ключ", self.api_key)
+        form.addRow("Key", self.api_key)
         form.addRow(self.status)
         form.addRow(form_buttons)
 
@@ -113,13 +113,13 @@ class ConnectionPanel(QWidget):
         self.kind.setCurrentText(r["kind"])
         self.url.setText(r["url"])
         self.api_key.setText(r["api_key"])
-        self.status.setText(f"Редактирование: {name}")
+        self.status.setText(f"Editing: {name}")
 
     def _delete(self):
         name = self._current_name()
         if name is None:
             return
-        answer = QMessageBox.question(self, "Удалить подключение", f"Удалить подключение «{name}»?")
+        answer = QMessageBox.question(self, "Delete connection", f"Delete the connection \"{name}\"?")
         if answer != QMessageBox.Yes:
             return
         db.delete_connection(name)
@@ -129,21 +129,21 @@ class ConnectionPanel(QWidget):
         self.changed.emit()
 
     def _check(self):
-        """Проверяет адрес и ключ из формы (без сохранения) запросом списка моделей."""
+        """Checks the address and key from the form (without saving) by requesting the model list."""
         try:
             url = normalize_url(self.url.text(), KINDS[self.kind.currentText()])
         except ValueError as e:
             self.status.setText(f"✗ {e}")
             return
-        self.status.setText(f"Проверяю {url} …")
+        self.status.setText(f"Checking {url} …")
         self.check_req.start(url, self.api_key.text().strip())
 
     def _on_check_ok(self, models: list):
-        self.status.setText(f"✓ Подключено, моделей на сервере: {len(models)}")
+        self.status.setText(f"✓ Connected, models on the server: {len(models)}")
 
     def _on_check_busy(self, busy: bool):
         self.check_btn.setEnabled(not busy)
-        self.check_btn.setText("Проверяю…" if busy else "Проверить")
+        self.check_btn.setText("Checking…" if busy else "Check")
 
     def wait_threads(self):
         self.check_req.wait()
@@ -151,7 +151,7 @@ class ConnectionPanel(QWidget):
     def _save(self):
         name = self.name.text().strip()
         if not name:
-            self.status.setText("Нужно имя подключения")
+            self.status.setText("A connection name is required")
             return
         kind = self.kind.currentText()
         try:
@@ -162,6 +162,6 @@ class ConnectionPanel(QWidget):
             return
         self._editing = name
         self.url.setText(url)
-        self.status.setText(f"Сохранено: {name}")
+        self.status.setText(f"Saved: {name}")
         self.reload(select=name)
         self.changed.emit()

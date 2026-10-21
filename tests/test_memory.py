@@ -20,59 +20,84 @@ def raises(fn):
         return True
 
 
-# --- основы слов ---
-check("падежи одного слова совпадают", stem("Маккум") == stem("Маккуме") == stem("Маккума"))
-check("ё = е", stem("пётр") == stem("петр"))
-check("числа не режутся", stem("2024") == "2024")
-check("короткие слова целиком", stem("дом") == "дом")
-check("stems разбирает фразу", stems("Ездили в Маккум!") == ["езди", "в", "макк"])
+# --- stems of Russian words (entries saved by the Russian version) ---
+check("case forms of one Russian word match", stem("Маккум") == stem("Маккуме") == stem("Маккума"))
+check("Russian yo = ye", stem("пётр") == stem("петр"))
+check("numbers are not cut", stem("2024") == "2024")
+check("short words whole", stem("дом") == "дом")
+check("stems splits a Russian phrase", stems("Ездили в Маккум!") == ["езди", "в", "макк"])
+ru = Memory(sqlite3.connect(":memory:")); rid, _ = ru.save("поездки", "Поездка в Маккум", "Ездили в Маккум в сентябре.")
+check("a Russian entry is found by another word form", [x["id"] for x in ru.search("помнишь, ездили в Маккуме?")] == [rid])
 
 mem = Memory(sqlite3.connect(":memory:"))
-check("пусто: тем нет", mem.topics() == [] and mem.topics_line() == "" and mem.count() == 0)
+check("empty: no topics", mem.topics() == [] and mem.topics_line() == "" and mem.count() == 0)
 
-a, upd = mem.save("поездки", "Поездка в Маккум", "Ездили в Маккум в сентябре втроём, ночевали в палатке у озера.", source_chat=7)
-b, _ = mem.save("поездки", "Байкал", "Летом 2023 был на Байкале с братом, видели нерпу.")
-c, _ = mem.save("проект SaiHarness", "Решение про память", "Память общая для всех профилей, поиск через FTS5 со стеммингом.")
-check("три записи", mem.count() == 3 and not upd)
-check("ids разные", len({a, b, c}) == 3)
+a, upd = mem.save("trips", "Trip to Makkum", "We went to Makkum in September, the three of us, and camped in a tent by the lake.", source_chat=7)
+b, _ = mem.save("trips", "Baikal", "In summer 2023 I was at Lake Baikal with my brother, we saw a seal.")
+c, _ = mem.save("project SaiHarness", "Memory decision", "Memory is shared by all profiles, search uses FTS5 with stemming.")
+check("three entries", mem.count() == 3 and not upd)
+check("ids differ", len({a, b, c}) == 3)
 
-# --- поиск ---
-r = mem.search("помнишь, ездили в Маккуме?")
-check("находит по другой словоформе", r and r[0]["id"] == a, r)
-check("в результате тема и заголовок", r and r[0]["topic"] == "поездки" and r[0]["title"] == "Поездка в Маккум")
-check("по слову из заголовка", mem.search("байкал")[0]["id"] == b)
-check("по теме", {x["id"] for x in mem.search("поездки")} >= {a, b})
-check("OR-запасной вариант: часть слов не найдена", mem.search("Маккум вертолёт")[0]["id"] == a)
-check("ничего не найдено", mem.search("квантовая хромодинамика") == [])
-check("пустой запрос", mem.search("  ") == [] and mem.search("...") == [])
-check("фильтр по теме", [x["id"] for x in mem.search("память", topic="поездки")] == [])
-check("фильтр по теме находит", [x["id"] for x in mem.search("память", topic="ПРОЕКТ saiharness")] == [c])
-check("limit", len(mem.search("поездки", limit=1)) == 1)
-check("спецсимволы FTS не ломают поиск", mem.search('"маккум" OR (x) * NEAR') is not None)
+# --- search ---
+r = mem.search("remember, we went to Makkum?")
+check("found by the words of a question", r and r[0]["id"] == a, r)
+check("the result has the topic and title", r and r[0]["topic"] == "trips" and r[0]["title"] == "Trip to Makkum")
+check("by a word from the title", mem.search("baikal")[0]["id"] == b)
+check("by topic", {x["id"] for x in mem.search("trips")} >= {a, b})
+check("the OR fallback: some words are not found", mem.search("Makkum helicopter")[0]["id"] == a)
+check("nothing found", mem.search("quantum chromodynamics") == [])
+check("an empty query", mem.search("  ") == [] and mem.search("...") == [])
+check("topic filter", [x["id"] for x in mem.search("memory", topic="trips")] == [])
+check("the topic filter finds", [x["id"] for x in mem.search("memory", topic="PROJECT saiharness")] == [c])
+check("limit", len(mem.search("trips", limit=1)) == 1)
+check("FTS special characters do not break the search", mem.search('"makkum" OR (x) * NEAR') is not None)
 
-# --- обновление, удаление ---
-a2, upd2 = mem.save("Поездки", "поездка в маккум", "Дополнено: ездили на двух машинах.")
-check("тот же заголовок и тема: обновление", upd2 and a2 == a and mem.count() == 3)
-check("новый текст ищется", mem.search("машинах")[0]["id"] == a)
-check("старый текст из индекса ушёл", mem.search("палатке") == [])
-mem.update(b, "поездки", "Байкал 2023", "Теперь про Алтай.")
-check("update меняет индекс", mem.search("алтай")[0]["id"] == b and mem.search("нерпу") == [])
-check("delete", mem.delete(c) and mem.get(c) is None and mem.search("стеммингом") == [])
-check("delete несуществующей", not mem.delete(9999))
-check("update несуществующей", raises(lambda: mem.update(9999, "т", "з", "т")))
+# --- update, delete ---
+a2, upd2 = mem.save("Trips", "trip to makkum", "Update: we went in two cars.")
+check("the same title and topic: an update", upd2 and a2 == a and mem.count() == 3)
+check("the new text is searchable", mem.search("cars")[0]["id"] == a)
+check("the old text left the index", mem.search("tent") == [])
+mem.update(b, "trips", "Baikal 2023", "Now about Altai.")
+check("update changes the index", mem.search("altai")[0]["id"] == b and mem.search("seal") == [])
+check("delete", mem.delete(c) and mem.get(c) is None and mem.search("stemming") == [])
+check("delete a missing one", not mem.delete(9999))
+check("update a missing one", raises(lambda: mem.update(9999, "t", "h", "t")))
 
-# --- темы ---
-check("topics: регистр не плодит темы", [(t.lower(), n) for t, n in mem.topics()] == [("поездки", 2)], mem.topics())
-check("topics_line", mem.topics_line().lower() == "поездки (2)")
+# --- topics ---
+check("topics: case does not create extra topics", [(t.lower(), n) for t, n in mem.topics()] == [("trips", 2)], mem.topics())
+check("topics_line", mem.topics_line().lower() == "trips (2)")
 for i in range(15):
-    mem.save(f"тема{i}", "з", "т")
-check("topics_line обрезается", "ещё тем" in mem.topics_line(limit=5))
-check("list по теме", len(mem.list("Поездки")) == 2)
+    mem.save(f"topic{i}", "h", "t")
+check("topics_line is cut", "more topics" in mem.topics_line(limit=5))
+check("list by topic", len(mem.list("Trips")) == 2)
 
-# --- проверки ввода ---
-check("пустая тема", raises(lambda: mem.save("", "з", "т")))
-check("пустой текст", raises(lambda: mem.save("т", "з", "   ")))
-check("длинный заголовок", raises(lambda: mem.save("т", "з" * 200, "т")))
+# --- input checks ---
+check("an empty topic", raises(lambda: mem.save("", "h", "t")))
+check("an empty text", raises(lambda: mem.save("t", "h", "   ")))
+check("a long title", raises(lambda: mem.save("t", "h" * 200, "t")))
+check("line breaks are kept in the text", mem.get(mem.save("t", "lines", "a" + chr(10) + "b")[0])["text"] == "a" + chr(10) + "b")
 
-print("\nALL OK" if ok_all else "\nЕСТЬ ОШИБКИ")
+# --- English stems ---
+check("name/names/named/naming", stem("name") == stem("names") == stem("named") == stem("naming"), [stem(w) for w in ("name", "names", "named", "naming")])
+check("plan/planned/planning", stem("plan") == stem("planned") == stem("planning"))
+check("city/cities, box/boxes", stem("city") == stem("cities") and stem("box") == stem("boxes"))
+check("computer/computing", stem("computer") == stem("computing"))
+check("company and computer differ", stem("company") != stem("computer"))
+check("class and this keep their s", stem("class") == "class" and stem("this") == "this")
+en = Memory(sqlite3.connect(":memory:"))
+en.save("trips", "Spain", "We planned a trip to Valencia and visited three cities.")
+check("English search by word form", [r["title"] for r in en.search("planning trips to the city")] == ["Spain"])
+
+# --- reindexing an old database (version 1: every word cut to 4 letters) ---
+old = sqlite3.connect(":memory:")
+Memory(old).save("поездки", "Испания", "Planned trip to Valencia, ездили в Маккум")
+old.execute("UPDATE memories SET i_text='plan trip to vale езди в макк'")
+old.execute("UPDATE memory_meta SET value='1'")
+old.commit()
+re_mem = Memory(old)
+check("after reindexing an English word is found", len(re_mem.search("Valencia")) == 1)
+check("and a Russian one still is", len(re_mem.search("в Маккуме")) == 1)
+check("the index version is updated", old.execute("SELECT value FROM memory_meta").fetchone()[0] == "2")
+
+print("\nALL OK" if ok_all else "\nSOME FAILED")
 sys.exit(0 if ok_all else 1)

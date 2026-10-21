@@ -30,35 +30,35 @@ seen = {}
 def ok_handler(req):
     seen["body"] = json.loads(req.content); seen["auth"] = req.headers.get("authorization"); seen["url"] = str(req.url)
     return httpx.Response(200, content=sse(
-        {"choices": [{"delta": {"role": "assistant"}}]},          # пустая дельта с ролью
-        d(reasoning_content="Думаю "), d(reasoning_content="про 17*3"),
-        d(reasoning="альт. поле"),                                  # вариант с delta.reasoning
-        d(content="Ответ: "), d(content="51"),
+        {"choices": [{"delta": {"role": "assistant"}}]},          # an empty delta with a role
+        d(reasoning_content="Thinking "), d(reasoning_content="about 17*3"),
+        d(reasoning="alt. field"),                                  # the delta.reasoning variant
+        d(content="Answer: "), d(content="51"),
         {"choices": [{"delta": {}, "finish_reason": "stop"}]},
-        {"choices": []},                                             # usage-чанк без choices
+        {"choices": []},                                             # a usage chunk without choices
     ), headers={"content-type": "text/event-stream"})
 out = run(ok_handler, key="k")
-check("разделение reasoning и content", out == [("reasoning", "Думаю "), ("reasoning", "про 17*3"),
-      ("reasoning", "альт. поле"), ("content", "Ответ: "), ("content", "51")])
-check("URL и тело запроса", seen["url"] == "http://x/v1/chat/completions" and seen["body"]["stream"] is True
+check("reasoning and content are separated", out == [("reasoning", "Thinking "), ("reasoning", "about 17*3"),
+      ("reasoning", "alt. field"), ("content", "Answer: "), ("content", "51")])
+check("URL and request body", seen["url"] == "http://x/v1/chat/completions" and seen["body"]["stream"] is True
       and seen["body"]["model"] == "m" and seen["body"]["temperature"] == 0.5 and seen["body"]["max_tokens"] == 100)
-check("ключ -> Bearer", seen["auth"] == "Bearer k")
-run(ok_handler); check("без ключа нет заголовка", seen["auth"] is None)
+check("key -> Bearer", seen["auth"] == "Bearer k")
+run(ok_handler); check("no header without a key", seen["auth"] is None)
 
 out = run(lambda r: httpx.Response(200, content=b"data: not-json\n\n: comment\n\ndata: " +
         json.dumps(d(content="ok")).encode() + b"\n\n"))
-check("мусорные строки пропускаются, поток без [DONE] заканчивается", out == [("content", "ok")])
+check("junk lines are skipped, a stream without [DONE] ends", out == [("content", "ok")])
 
 def expect_err(handler, needle):
     try: run(handler); return False
     except llm.LLMError as e: return needle in str(e)
-check("HTTP 400 с телом ошибки", expect_err(lambda r: httpx.Response(400, json={"error": {"message": "model not found"}}), "model not found"))
-check("HTTP 400 с error-строкой", expect_err(lambda r: httpx.Response(400, json={"error": "bad"}), "bad"))
-check("HTTP 401", expect_err(lambda r: httpx.Response(401, json={}), "отклонил ключ (401)"))
-check("HTTP 500 без тела", expect_err(lambda r: httpx.Response(500, content=b"oops"), "Ошибка сервера: 500"))
-check("ошибка внутри потока", expect_err(lambda r: httpx.Response(200, content=sse(d(content="a"), {"error": {"message": "out of memory"}})), "out of memory"))
+check("HTTP 400 with an error body", expect_err(lambda r: httpx.Response(400, json={"error": {"message": "model not found"}}), "model not found"))
+check("HTTP 400 with an error string", expect_err(lambda r: httpx.Response(400, json={"error": "bad"}), "bad"))
+check("HTTP 401", expect_err(lambda r: httpx.Response(401, json={}), "rejected the key (401)"))
+check("HTTP 500 without a body", expect_err(lambda r: httpx.Response(500, content=b"oops"), "Server error: 500"))
+check("an error inside the stream", expect_err(lambda r: httpx.Response(200, content=sse(d(content="a"), {"error": {"message": "out of memory"}})), "out of memory"))
 def refuse(r): raise httpx.ConnectError("refused")
-check("нет соединения", expect_err(refuse, "Нет связи"))
+check("no connection", expect_err(refuse, "Cannot reach"))
 
 cancel = threading.Event(); got = []
 def gen():
@@ -69,24 +69,24 @@ def gen():
             got.append(ev); cancel.set()
     finally: llm.httpx.stream = real
 gen()
-check("cancel обрывает поток после текущего чанка", len(got) == 1)
+check("cancel ends the stream after the current chunk", len(got) == 1)
 
 out = run(lambda r: httpx.Response(200, content=sse(
     {"model": "other", "choices": [{"delta": {"content": "a"}}]},
     {"model": "other", "choices": [{"delta": {}, "finish_reason": "length"}]})))
-check("подмена модели и обрыв по лимиту -> notice (подмена один раз)",
-      out == [("notice", "Ответила модель «other» вместо «m»"), ("content", "a"),
-              ("notice", "Лимит max tokens исчерпан, ответ оборван")])
+check("model substitution and a cut-off by the limit -> notice (substitution once)",
+      out == [("notice", "Model \"other\" answered instead of \"m\""), ("content", "a"),
+              ("notice", "Max tokens limit reached, the reply was cut off")])
 out = run(lambda r: httpx.Response(200, content=sse({"model": "m", "choices": [{"delta": {"content": "a"}, "finish_reason": "stop"}]})))
-check("та же модель и stop -> без notice", out == [("content", "a")])
+check("the same model and stop -> no notice", out == [("content", "a")])
 
 # context_builder
-prof = {"system_prompt": " Ты помощник ", "memory": "Любит чай"}
-hist = [{"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1", "reasoning": "секрет"},
+prof = {"system_prompt": " You are an assistant ", "memory": "Likes tea"}
+hist = [{"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1", "reasoning": "secret"},
         {"role": "user", "content": "q2"}, {"role": "assistant", "content": ""}]
 m = build_messages(prof, hist)
-check("system = prompt + память", m[0] == {"role": "system", "content": "Ты помощник\n\nПамять:\nЛюбит чай"})
-check("история без размышлений и пустых", [x["role"] for x in m[1:]] == ["user", "assistant", "user"]
+check("system = prompt + memory", m[0] == {"role": "system", "content": "You are an assistant\n\nMemory:\nLikes tea"})
+check("history without reasoning and empty messages", [x["role"] for x in m[1:]] == ["user", "assistant", "user"]
       and all(set(x) == {"role", "content"} for x in m))
-check("без system/памяти нет system-сообщения", build_messages({"system_prompt": "", "memory": ""}, hist[:1]) == [hist[0]])
+check("without system/memory there is no system message", build_messages({"system_prompt": "", "memory": ""}, hist[:1]) == [hist[0]])
 print("ALL OK" if ok_all else "SOME FAILED")

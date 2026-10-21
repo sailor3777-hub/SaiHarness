@@ -1,8 +1,8 @@
-"""Отрисовка ответов модели: Markdown -> HTML для QTextEdit и упрощённый LaTeX -> текст.
+"""Rendering model replies: Markdown -> HTML for QTextEdit and simplified LaTeX -> text.
 
-QTextEdit не умеет формулы, поэтому простые формулы превращаются в читаемый текст с юникодом
-(`$58 - 29 = \\mathbf{29}$` -> `58 - 29 = **29**`). Сложные конструкции остаются как есть.
-Код (блоки и `inline`) не трогается, сырой HTML из ответа экранируется.
+QTextEdit cannot do formulas, so simple formulas are turned into readable Unicode text
+(`$58 - 29 = \\mathbf{29}$` -> `58 - 29 = **29**`). Complex constructs are left as they are.
+Code (blocks and `inline`) is left alone; raw HTML from the reply is escaped.
 """
 import re
 
@@ -10,10 +10,10 @@ from markdown_it import MarkdownIt
 
 _md = MarkdownIt("commonmark", {"html": False, "breaks": True}).enable(["table", "strikethrough"])
 
-# фрагменты кода, которые не надо трогать при замене формул
+# code fragments that must not be touched when replacing formulas
 _CODE = re.compile(r"(```.*?```|~~~.*?~~~|`[^`\n]+`)", re.S)
-# $$...$$, \[...\], \(...\), $...$ (правила pandoc: после открывающего и перед закрывающим не пробел,
-# после закрывающего не цифра; так «$5 и $10» не принимается за формулу)
+# $$...$$, \[...\], \(...\), $...$ (pandoc rules: no space after the opening and before the closing delimiter,
+# not followed by a digit after the closing one; so "$5 and $10" is not taken for a formula)
 _MATH = re.compile(
     r"\$\$(?P<d1>.+?)\$\$|\\\[(?P<d2>.+?)\\\]|\\\((?P<i1>.+?)\\\)"
     r"|(?<![\\$])\$(?![\s$])(?P<i2>[^$\n]+?)(?<![\s\\])\$(?!\d)",
@@ -33,21 +33,21 @@ _SYMBOLS = {
 _SUPER_CHARS, _SUB_CHARS = "0123456789+-n", "0123456789+-"
 _SUPER = str.maketrans(_SUPER_CHARS, "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻ⁿ")
 _SUB = str.maketrans(_SUB_CHARS, "₀₁₂₃₄₅₆₇₈₉₊₋")
-_ARG = r"\{([^{}]*)\}"  # аргумент в фигурных скобках без вложенных скобок
+_ARG = r"\{([^{}]*)\}"  # an argument in curly braces without nested braces
 
 
 def _latex_to_text(s: str) -> str:
     s = re.sub(r"\\(?:mathbf|textbf|boldsymbol)" + _ARG, r"**\1**", s)
     s = re.sub(r"\\(?:mathit|textit|emph)" + _ARG, r"*\1*", s)
     s = re.sub(r"\\(?:text|mathrm|mathbb|mathcal|operatorname|mbox)" + _ARG, r"\1", s)
-    for _ in range(3):  # вложенные дроби и корни
+    for _ in range(3):  # nested fractions and roots
         s = re.sub(r"\\d?frac" + _ARG + _ARG, lambda m: _frac(m.group(1), m.group(2)), s)
         s = re.sub(r"\\sqrt" + _ARG, r"√(\1)", s)
     s = re.sub(r"\^" + _ARG, lambda m: _script(m.group(1), _SUPER_CHARS, _SUPER, "^"), s)
     s = re.sub(r"\^(\d|n)", lambda m: _script(m.group(1), _SUPER_CHARS, _SUPER, "^"), s)
     s = re.sub(r"_" + _ARG, lambda m: _script(m.group(1), _SUB_CHARS, _SUB, "_"), s)
     s = re.sub(r"_(\d)", lambda m: _script(m.group(1), _SUB_CHARS, _SUB, "_"), s)
-    # длинные команды первыми: \leftarrow раньше \le
+    # long commands first: \leftarrow before \le
     for cmd in sorted(_SYMBOLS, key=len, reverse=True):
         s = re.sub(re.escape(cmd) + r"(?![A-Za-z])", lambda _m, v=_SYMBOLS[cmd]: v, s)
     s = re.sub(r"\\(?:left|right|big|Big|bigg|Bigg)(?![A-Za-z])", "", s)
@@ -62,16 +62,16 @@ def _frac(a: str, b: str) -> str:
 
 
 def _script(body: str, chars: str, table: dict, fallback: str) -> str:
-    """Верхний/нижний индекс юникодом, если все символы есть в таблице, иначе ^(...) / _(...)."""
+    """Superscript/subscript in Unicode if all characters are in the table, otherwise ^(...) / _(...)."""
     if body and all(ch in chars for ch in body):
         return body.translate(table)
     return f"{fallback}({body})"
 
 
 def simplify_latex(text: str) -> str:
-    """Заменяет формулы $...$, $$...$$, \\(...\\), \\[...\\] читаемым текстом; код не трогает."""
+    """Replaces the formulas $...$, $$...$$, \\(...\\), \\[...\\] with readable text; leaves code alone."""
     parts = _CODE.split(text)
-    for i in range(0, len(parts), 2):  # чётные элементы — не код
+    for i in range(0, len(parts), 2):  # even elements are not code
         parts[i] = _MATH.sub(
             lambda m: _latex_to_text(next(g for g in m.groups() if g is not None)), parts[i]
         )
@@ -79,12 +79,12 @@ def simplify_latex(text: str) -> str:
 
 
 def render_markdown(text: str) -> str:
-    """Текст ответа модели -> HTML-фрагмент для QTextEdit."""
+    """Model reply text -> HTML fragment for QTextEdit."""
     html = _md.render(simplify_latex(text))
     return html.replace("<table>", '<table border="1" cellspacing="0" cellpadding="5">')
 
 
-# стили для QTextDocument.setDefaultStyleSheet: Qt понимает только простые селекторы по тегам
+# styles for QTextDocument.setDefaultStyleSheet: Qt understands only simple tag selectors
 DEFAULT_STYLESHEET = """
 pre { background-color: #141414; color: #e6e6e6; font-family: Consolas, monospace; }
 code { background-color: #141414; color: #f0c674; font-family: Consolas, monospace; }

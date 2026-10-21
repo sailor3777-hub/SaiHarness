@@ -1,1 +1,1 @@
-"""Локальный веб-доступ: безопасная загрузка страниц, извлечение текста, кэш и поисковый индекс. Без Qt и внешних сервисов."""
+"""Local web access: safe page loading, text extraction, a cache and a search index. No Qt and no external services."""

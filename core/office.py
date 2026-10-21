@@ -1,9 +1,9 @@
-"""Создание Word и Excel для инструментов docx_write / xlsx_write (чистый Python, без Qt).
+"""Creating Word and Excel files for the docx_write / xlsx_write tools (pure Python, no Qt).
 
-Word собирается из Markdown (markdown-it-py + python-docx): заголовки, абзацы, жирный/курсив/код/ссылки,
-маркированные и нумерованные списки (с вложенностью), таблицы, цитаты, блоки кода, горизонтальная черта.
-Excel собирается из словаря «имя листа → строки»; строка-значение, начинающаяся с «=», пишется формулой.
-Обе функции пишут атомарно (временный файл + replace) и возвращают (сообщение, '') или (None, причина).
+Word is built from Markdown (markdown-it-py + python-docx): headings, paragraphs, bold/italic/code/links,
+bulleted and numbered lists (nested), tables, quotes, code blocks, horizontal rules.
+Excel is built from a "sheet name → rows" dict; a string value starting with "=" is written as a formula.
+Both functions write atomically (temporary file + replace) and return (message, '') or (None, reason).
 """
 import os
 import shutil
@@ -17,18 +17,18 @@ CODE_FONT = "Consolas"
 
 
 def _prepare_target(path: Path, overwrite: bool, suffixes: tuple[str, ...]) -> str:
-    """Пустая строка, если писать можно, иначе причина отказа."""
+    """An empty string if writing is allowed, otherwise the reason for refusal."""
     if path.suffix.lower() not in suffixes:
-        return f"расширение файла должно быть {' или '.join(suffixes)}"
+        return f"the file extension must be {' or '.join(suffixes)}"
     if path.is_dir():
-        return "по этому пути папка"
+        return "this path is a folder"
     if path.exists() and not overwrite:
-        return "файл уже существует; чтобы заменить его, передай overwrite=true (старый сохранится как .bak)"
+        return "the file already exists; to replace it, pass overwrite=true (the old one will be kept as .bak)"
     return ""
 
 
 def _atomic_save(path: Path, save, overwrite: bool) -> str:
-    """Сохраняет через save(tmp_path); существующий файл перед заменой копируется в .bak. Возвращает путь копии или ''."""
+    """Saves through save(tmp_path); an existing file is copied to .bak before being replaced. Returns the backup path or ''."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".sai-tmp")
     backup = ""
@@ -89,8 +89,8 @@ def markdown_to_docx(markdown: str):
 
     doc = Document()
     tokens = MarkdownIt("commonmark").enable("table").parse(markdown)
-    lists: list[str] = []          # стек видов открытых списков
-    quote = 0                      # глубина цитаты
+    lists: list[str] = []          # stack of open list kinds
+    quote = 0                      # quote depth
     table: dict | None = None
     i = 0
     while i < len(tokens):
@@ -161,9 +161,9 @@ def markdown_to_docx(markdown: str):
 
 def write_docx(markdown: str, path: Path, overwrite: bool = False) -> tuple[str | None, str]:
     if not markdown.strip():
-        return None, "markdown пуст"
+        return None, "markdown is empty"
     if len(markdown) > MAX_MARKDOWN_CHARS:
-        return None, f"текст слишком длинный (больше {MAX_MARKDOWN_CHARS} символов)"
+        return None, f"the text is too long (over {MAX_MARKDOWN_CHARS} characters)"
     reason = _prepare_target(path, overwrite, (".docx",))
     if reason:
         return None, reason
@@ -171,9 +171,9 @@ def write_docx(markdown: str, path: Path, overwrite: bool = False) -> tuple[str 
         doc = markdown_to_docx(markdown)
         backup = _atomic_save(path, lambda tmp: doc.save(str(tmp)), overwrite)
     except OSError as e:
-        return None, f"запись не удалась ({e.__class__.__name__}: {e.strerror or e})"
-    extra = f" Копия прежнего файла: {backup}." if backup else ""
-    return f"Готово: создан Word-документ {path}.{extra}", ""
+        return None, f"writing failed ({e.__class__.__name__}: {e.strerror or e})"
+    extra = f" Copy of the previous file: {backup}." if backup else ""
+    return f"Done: created the Word document {path}.{extra}", ""
 
 
 # ---------------------------------------------------------------- Excel
@@ -181,18 +181,18 @@ def write_docx(markdown: str, path: Path, overwrite: bool = False) -> tuple[str 
 def write_xlsx(sheets: dict, path: Path, overwrite: bool = False) -> tuple[str | None, str]:
     from openpyxl import Workbook
     if not isinstance(sheets, dict) or not sheets:
-        return None, "sheets должен быть непустым объектом {имя листа: [[ячейки строки], ...]}"
+        return None, "sheets must be a non-empty object {sheet name: [[row cells], ...]}"
     if len(sheets) > MAX_SHEETS:
-        return None, f"листов больше {MAX_SHEETS}"
+        return None, f"more than {MAX_SHEETS} sheets"
     cells = 0
     for name, rows in sheets.items():
         if not name or len(name) > 31 or BAD_SHEET_CHARS & set(name):
-            return None, f"недопустимое имя листа «{name}» (до 31 символа, без []:*?/\\)"
+            return None, f"invalid sheet name \"{name}\" (up to 31 characters, without []:*?/\\)"
         if not isinstance(rows, list) or any(not isinstance(r, list) for r in rows):
-            return None, f"лист «{name}»: ожидается список строк, каждая строка список ячеек"
+            return None, f"sheet \"{name}\": a list of rows is expected, each row a list of cells"
         cells += sum(len(r) for r in rows)
     if cells > MAX_CELLS:
-        return None, f"ячеек больше {MAX_CELLS}"
+        return None, f"more than {MAX_CELLS} cells"
     reason = _prepare_target(path, overwrite, (".xlsx",))
     if reason:
         return None, reason
@@ -205,6 +205,6 @@ def write_xlsx(sheets: dict, path: Path, overwrite: bool = False) -> tuple[str |
     try:
         backup = _atomic_save(path, lambda tmp: wb.save(str(tmp)), overwrite)
     except OSError as e:
-        return None, f"запись не удалась ({e.__class__.__name__}: {e.strerror or e})"
-    extra = f" Копия прежнего файла: {backup}." if backup else ""
-    return f"Готово: создана книга Excel {path} (листов: {len(sheets)}, ячеек: {cells}).{extra}", ""
+        return None, f"writing failed ({e.__class__.__name__}: {e.strerror or e})"
+    extra = f" Copy of the previous file: {backup}." if backup else ""
+    return f"Done: created the Excel workbook {path} (sheets: {len(sheets)}, cells: {cells}).{extra}", ""

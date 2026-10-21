@@ -19,14 +19,14 @@ from ui.request_dialog import RequestDialog
 from worker import CONTEXT_SAFETY, ChatStreamer, ContextLimitRequest
 
 TITLE_MAX = 40
-SCALE_MIN, SCALE_MAX = 0.6, 2.0   # в каких пределах замеры сервера могут поправлять нашу оценку токенов
-MIN_TOKENS_TO_CALIBRATE = 300     # на коротких запросах отношение слишком шумное
+SCALE_MIN, SCALE_MAX = 0.6, 2.0   # the range within which the server's measurements may correct our token estimate
+MIN_TOKENS_TO_CALIBRATE = 300     # on short requests the ratio is too noisy
 
 
 def _fmt(n: int) -> str:
     return f"{n:,}".replace(",", " ")
-LIMIT_TTL = 20.0  # как часто перепроверять у сервера, сколько контекста у загруженной модели
-LOCK_NOTE = "Модель закреплена за этим чатом: после первого сообщения её не меняют."
+LIMIT_TTL = 20.0  # how often to re-check with the server how much context the loaded model has
+LOCK_NOTE = "The model is locked to this chat: it is not changed after the first message."
 
 
 class MainWindow(QMainWindow):
@@ -46,19 +46,19 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(splitter)
 
         self.chat_id: int | None = None
-        self.stream: dict | None = None  # активная генерация: id, chat_id, thread, content, reasoning
+        self.stream: dict | None = None  # active generation: id, chat_id, thread, content, reasoning
         self._stream_seq = 0
         self._threads: set[ChatStreamer] = set()
-        self.last_requests: dict[int, dict] = {}  # chat_id -> последний отправленный запрос (только в памяти)
-        self._free_choice: str | None = None  # последний выбор профиля пользователем в незакреплённом чате
+        self.last_requests: dict[int, dict] = {}  # chat_id -> the last request sent (in memory only)
+        self._free_choice: str | None = None  # the user's last profile choice in an unlocked chat
         self.selector = self.context.model_selector
         self.files_panel = self.context.files_panel
         self.limit_req = ContextLimitRequest(self)
         self._limit_key: tuple | None = None
         self._limit_time = 0.0
-        self._limit_info: tuple | None = None  # (рабочий лимит | None, модель загружена, максимум) для _limit_key
-        self._scale: dict[tuple, float] = {}  # (url, модель) -> поправка нашей оценки токенов по замерам сервера
-        self._last_usage: dict[int, int] = {}  # chat_id -> токенов в последнем запросе по счёту сервера
+        self._limit_info: tuple | None = None  # (working limit | None, model loaded, maximum) for _limit_key
+        self._scale: dict[tuple, float] = {}  # (url, model) -> correction of our token estimate from the server's measurements
+        self._last_usage: dict[int, int] = {}  # chat_id -> tokens in the last request counted by the server
         self.limit_req.succeeded.connect(self._on_limit)
         self.limit_req.failed.connect(self._on_limit_failed)
         self.files_panel.selection_changed.connect(self._on_selection_changed)
@@ -86,10 +86,10 @@ class MainWindow(QMainWindow):
         else:
             self.open_chat(None)
 
-    # --- чаты ---
+    # --- chats ---
 
     def new_chat(self):
-        # файлы, отмеченные до создания первого чата, переходят в него; в остальных случаях чат начинается пустым
+        # files checked before the first chat is created move into it; otherwise a chat starts empty
         draft = self.files_panel.selection.copy() if self.chat_id is None else Selection()
         draft_tools = set(self.tools_panel.enabled) if self.chat_id is None else set()
         chat_id = db.create_chat()
@@ -105,7 +105,7 @@ class MainWindow(QMainWindow):
         chat = db.get_chat(chat_id) if chat_id is not None else None
         if chat is None:
             self.chat_id = None
-            self.chat_view.set_title("Диалог")
+            self.chat_view.set_title("Dialog")
             self.chat_view.set_messages([])
             self.files_panel.set_selection(Selection())
             self.tools_panel.set_enabled(set())
@@ -130,17 +130,17 @@ class MainWindow(QMainWindow):
         self._refresh_context_info()
 
     def _tools_text(self, profile, catalog) -> str:
-        """Каталог инструментов и, если включены инструменты памяти, правила профиля с перечнем тем в памяти."""
+        """The tool catalog and, if memory tools are enabled, the profile's rules with the list of memory topics."""
         if not catalog:
             return ""
         with closing(db.connect()) as conn:
             block = memory.prompt_block(profile["memory_rules"], [t.id for t in catalog.tools], memory.Memory(conn))
         return catalog.text() + (f"\n\n{block}" if block else "")
 
-    # --- размер контекста ---
+    # --- context size ---
 
     def _refresh_context_info(self, force: bool = False):
-        """Обновляет под деревом файлов оценку «запрос целиком» и лимит контекста модели."""
+        """Updates the "whole request" estimate and the model's context limit under the file tree."""
         profile = self._bound_profile()
         if profile is None and self.selector.profile.currentText():
             profile = db.get_profile(self.selector.profile.currentText())
@@ -177,26 +177,26 @@ class MainWindow(QMainWindow):
         self.files_panel.set_limit(None)
 
     def _known_limit(self, conn, profile) -> int | None:
-        """Рабочий контекст загруженной модели, если он известен именно для этой пары подключение + модель."""
+        """Working context of the loaded model, if it is known for exactly this connection + model pair."""
         if self._limit_info and self._limit_key == (conn["url"], profile["base_model"]):
             return self._limit_info[0] or None
         return None
 
     def _context_overflow(self, conn, profile, messages: list, tools: list | None) -> str:
-        """Текст отказа, если запрос с запасом на ответ не помещается в контекст модели, иначе пустая строка."""
+        """The refusal text if the request with room for the reply does not fit into the model's context, otherwise an empty string."""
         limit = self._known_limit(conn, profile)
         if not limit:
             return ""
-        scale = max(1.0, self._scale.get((conn["url"], profile["base_model"]), 1.0))  # защита не «учится вниз»
+        scale = max(1.0, self._scale.get((conn["url"], profile["base_model"]), 1.0))  # the guard does not "learn downwards"
         estimated = int(estimate_request_tokens(messages, tools) * scale * CONTEXT_SAFETY)
         reserve = min(profile["max_tokens"], limit // 4)
         if estimated + reserve <= limit:
             return ""
-        return (f"Запрос ≈{_fmt(estimated)} ток. и ответ до {_fmt(reserve)} не помещаются в контекст модели "
-                f"({_fmt(limit)}). Сними файлы, начни новый чат или увеличь контекст в LM Studio.")
+        return (f"The request ≈{_fmt(estimated)} tok. and a reply of up to {_fmt(reserve)} do not fit into the model's context "
+                f"({_fmt(limit)}). Uncheck files, start a new chat or increase the context in LM Studio.")
 
     def _on_usage(self, stream_id: int, prompt_tokens: int, _completion: int, raw_estimate: int):
-        """Настоящее число токенов от сервера: показываем его и поправляем оценку для этой модели."""
+        """The real token count from the server: show it and correct the estimate for this model."""
         s = self.stream
         if not s or s["id"] != stream_id:
             return
@@ -205,7 +205,7 @@ class MainWindow(QMainWindow):
             old = self._scale.get(s["key"], 1.0)
             new = min(SCALE_MAX, max(SCALE_MIN, 0.5 * old + 0.5 * prompt_tokens / raw_estimate))
             self._scale[s["key"]] = new
-            s["thread"].scale = max(1.0, new)  # следующие раунды проверяются уже с поправкой, но не мягче базовой оценки
+            s["thread"].scale = max(1.0, new)  # the next rounds are checked with the correction, but never softer than the base estimate
         if s["chat_id"] == self.chat_id:
             self.files_panel.set_scale(self._scale.get(s["key"], 1.0))
             self.files_panel.set_actual(prompt_tokens)
@@ -220,14 +220,14 @@ class MainWindow(QMainWindow):
             self.stream = None
             self.chat_view.set_busy(False)
 
-    # --- профиль чата ---
+    # --- chat profile ---
 
     def _remember_choice(self, name: str):
         self._free_choice = name
         self._refresh_context_info()
 
     def _bound_profile(self):
-        """Профиль, закреплённый за текущим чатом, если он ещё существует."""
+        """The profile locked to the current chat, if it still exists."""
         chat = db.get_chat(self.chat_id) if self.chat_id is not None else None
         if chat and chat["profile"]:
             return db.get_profile(chat["profile"])
@@ -247,21 +247,21 @@ class MainWindow(QMainWindow):
     def _update_status(self):
         if self.stream:
             if self.stream["chat_id"] != self.chat_id:
-                self.chat_view.set_status("Идёт ответ в другом чате…")
+                self.chat_view.set_status("A reply is in progress in another chat…")
                 return
-            parts = ["Генерация…"]
+            parts = ["Generating…"]
             if self.stream["files"]:
-                parts.append(f"файлов: {self.stream['files']}")
+                parts.append(f"files: {self.stream['files']}")
             if self.stream["skipped"]:
-                parts.append(f"пропущено: {self.stream['skipped']}")
+                parts.append(f"skipped: {self.stream['skipped']}")
             if self.stream["rounds"]:
-                parts.append(f"вызовов инструментов: {self.stream['rounds']}")
+                parts.append(f"tool calls: {self.stream['rounds']}")
             self.chat_view.set_status(" · ".join(parts))
             return
         bound = self._bound_profile()
         self.chat_view.set_status(f"{bound['name']} · {bound['base_model']}" if bound else "")
 
-    # --- отправка и стриминг ---
+    # --- sending and streaming ---
 
     def on_submit(self, text: str):
         picked = list(self.chat_view.pending)
@@ -272,24 +272,24 @@ class MainWindow(QMainWindow):
             name = self.selector.profile.currentText()
             profile = db.get_profile(name) if name else None
         if profile is None:
-            self.chat_view.set_status("Выбери модель во вкладке «Модель»")
+            self.chat_view.set_status("Choose a model on the Model tab")
             return
         conn = db.get_connection(profile["connection"]) if profile["connection"] else None
         if conn is None:
             self.chat_view.set_status(
-                f"У профиля «{profile['name']}» нет подключения. Выбери его в Model Builder."
+                f"Profile \"{profile['name']}\" has no connection. Choose one in Model Builder."
             )
             return
         bundle = self.files_panel.load_bundle()
         if bundle.truncated:
             self.chat_view.set_status(
-                "Выбрано слишком много файлов или объёма. Сократи выбор во вкладке «Файлы»."
+                "Too many files or too much content selected. Reduce the selection on the Files tab."
             )
             return
 
         enabled = self.tools_panel.enabled_tools()
         catalog = Catalog(enabled) if enabled else None
-        # Защита от переполнения контекста: до любых записей в историю проверяем, что запрос поместится
+        # Context overflow guard: before writing anything to the history, check that the request fits
         known_history = db.list_messages(self.chat_id) if self.chat_id is not None else []
         candidate = build_messages(profile, known_history, bundle.files, self._tools_text(profile, catalog))
         candidate.append({"role": "user", "content": images.user_content(text, picked)})
@@ -301,8 +301,8 @@ class MainWindow(QMainWindow):
         if self.chat_id is None:
             self.new_chat()
         chat = db.get_chat(self.chat_id)
-        if chat["title"] == db.DEFAULT_CHAT_TITLE:
-            title = " ".join((text or "Изображение").split())[:TITLE_MAX]
+        if db.is_default_title(chat["title"]):
+            title = " ".join((text or "Image").split())[:TITLE_MAX]
             db.rename_chat(self.chat_id, title)
             self.chat_view.set_title(title)
         if chat["profile"] != profile["name"]:
@@ -355,17 +355,17 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _image_preparer(conn, profile):
-        """Подготовка картинок в потоке ответа: модель с vision получает сами изображения, остальные их описание."""
+        """Preparing pictures in the reply thread: a vision model gets the images themselves, the others get a description."""
         url, key, model = conn["url"], conn["api_key"], profile["base_model"]
 
         def prepare(messages: list, notify) -> list:
-            if llm.model_type(url, key, model) != "llm":  # vlm или неизвестный сервер: отправляем картинки как есть
+            if llm.model_type(url, key, model) != "llm":  # vlm or an unknown server: send the pictures as they are
                 return images.to_data_urls(messages)
             try:
                 cfg = vision.load_config(db.DB_PATH)
             except vision.VisionError as e:
-                raise llm.LLMError(f"Модель «{model}» не видит изображений, а описать их некому: {e}") from None
-            notify(f"Модель не видит изображений: описываю их моделью «{cfg.model}»")
+                raise llm.LLMError(f"Model \"{model}\" cannot see images, and there is no model to describe them: {e}") from None
+            notify(f"The model cannot see images: describing them with \"{cfg.model}\"")
 
             def describe(path):
                 try:
@@ -391,10 +391,10 @@ class MainWindow(QMainWindow):
     def _on_tool_running(self, stream_id: int, name: str, arguments: str):
         s = self.stream
         if s and s["id"] == stream_id and s["chat_id"] == self.chat_id:
-            self.chat_view.set_status(f"Инструмент: {describe_call(name, arguments)}")
+            self.chat_view.set_status(f"Tool: {describe_call(name, arguments)}")
 
     def _on_tool_round(self, stream_id: int, assistant: dict, results: list):
-        """Раунд «модель позвала инструменты, получила результаты» сохраняется целиком и показывается в чате."""
+        """A "model called tools and got the results" round is saved as a whole and shown in the chat."""
         s = self.stream
         if not s or s["id"] != stream_id or db.get_chat(s["chat_id"]) is None:
             return
@@ -409,7 +409,7 @@ class MainWindow(QMainWindow):
             for r in results
         ]
         db.add_messages(s["chat_id"], rows)
-        s["content"] = s["reasoning"] = ""  # дальше копится следующий отрезок ответа
+        s["content"] = s["reasoning"] = ""  # the next part of the reply accumulates from here
         s["rounds"] += 1
         if s["chat_id"] == self.chat_id:
             self.chat_view.set_messages(db.list_messages(s["chat_id"]))
@@ -424,7 +424,7 @@ class MainWindow(QMainWindow):
         self._finish(stream_id)
 
     def _reap_threads(self):
-        """Забыть завершившиеся потоки (только когда ОС-поток уже закончил работу)."""
+        """Forget finished threads (only once the OS thread has actually ended)."""
         self._threads = {t for t in self._threads if not t.isFinished()}
 
     def show_request(self):
@@ -439,14 +439,14 @@ class MainWindow(QMainWindow):
             self.stream["thread"].cancel()
 
     def _finish(self, stream_id: int, error: str | None = None, stopped: bool = False):
-        """Завершает генерацию: сохраняет то, что успело прийти, и обновляет интерфейс."""
+        """Finishes generation: saves what has arrived and updates the interface."""
         s = self.stream
         if not s or s["id"] != stream_id:
             return
         s["thread"].cancel()
         self.stream = None
         has_text = bool(s["content"] or s["reasoning"])
-        # ответ, пришедший как размышления: сохраняем его как ответ, иначе в истории модели он пропадёт
+        # a reply that arrived as reasoning: save it as the answer, otherwise it would disappear from the model's history
         promoted = not error and not stopped and llm.answer_in_reasoning(s["content"], s["reasoning"], s["notice"])
         if promoted:
             s["content"], s["reasoning"] = s["reasoning"].strip(), ""
@@ -456,13 +456,13 @@ class MainWindow(QMainWindow):
             self.chat_view.end_live(keep=has_text)
             if promoted and db.get_chat(s["chat_id"]) is not None:
                 self.chat_view.set_messages(db.list_messages(s["chat_id"]))
-        # ошибка, остановка или пустой ответ остаются в истории строкой «Система» (модели она не отправляется)
+        # an error, a stop or an empty reply stays in the history as a "System" line (it is not sent to the model)
         if error:
             note = error
         elif stopped:
-            note = "Остановлено"
+            note = "Stopped"
         elif not has_text:
-            note = "Модель вернула пустой ответ" + (f" ({s['notice']})" if s["notice"] else "")
+            note = "The model returned an empty reply" + (f" ({s['notice']})" if s["notice"] else "")
         else:
             note = ""
         if note and db.get_chat(s["chat_id"]) is not None:
@@ -475,7 +475,7 @@ class MainWindow(QMainWindow):
         if error:
             self.chat_view.set_status(error)
         elif stopped:
-            self.chat_view.set_status("Остановлено")
+            self.chat_view.set_status("Stopped")
         elif s.get("notice") and s["chat_id"] == self.chat_id:
             self.chat_view.set_status(s["notice"])
         self.chat_list.reload()

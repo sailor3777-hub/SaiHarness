@@ -1,4 +1,4 @@
-"""Настройки веб-доступа в основной базе (читает и вкладка «Веб», и tools_server.py в своём процессе)."""
+"""Web access settings in the main database (read by both the Web tab and tools_server.py in its own process)."""
 import sqlite3
 
 SEARXNG_URL = "searxng_url"

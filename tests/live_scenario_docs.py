@@ -1,5 +1,5 @@
-"""Живой прогон чтения PDF / Word / Excel через fs_read: факты лежат в документах, ответ модели проверяется по ним.
-Запуск: python tests/live_scenario_docs.py <модель> <max_tokens>"""
+"""A live run of reading PDF / Word / Excel through fs_read: the facts are in the documents, the model's answer is checked against them.
+Usage: python tests/live_scenario_docs.py <model> <max_tokens>"""
 import json, sys, time, pathlib, tempfile
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -19,7 +19,7 @@ def wait(cond, timeout=900.0):
 import docx, openpyxl
 from pypdf import PdfWriter
 def make_pdf(path, pages):
-    """Минимальный PDF с текстом (Helvetica, только латиница): по странице на элемент pages."""
+    """A minimal PDF with text (Helvetica, Latin only): one page per element of pages."""
     objs = [b"<< /Type /Catalog /Pages 2 0 R >>"]
     kids = " ".join(f"{3 + 2 * i} 0 R" for i in range(len(pages)))
     objs.append(f"<< /Type /Pages /Kids [{kids}] /Count {len(pages)} >>".encode())
@@ -46,17 +46,17 @@ d = tmp / "Docs"; d.mkdir()
 make_pdf(d / "contract.pdf", ["Contract between ACME and Beta. Term: 12 months.", "Delivery code: KAPPA-731. Penalty: 5 percent."])
 w0 = PdfWriter(); w0.add_blank_page(300, 300)
 with open(d / "scan.pdf", "wb") as f: w0.write(f)
-dd = docx.Document(); dd.add_heading("Отчёт о ремонте", 1); dd.add_paragraph("Ремонт офиса завершён в марте.")
-tb = dd.add_table(rows=3, cols=2); rows = [("Статья", "Сумма, руб"), ("Материалы", "48250"), ("Работа", "31000")]
+dd = docx.Document(); dd.add_heading("Repair report", 1); dd.add_paragraph("The office repair was finished in March.")
+tb = dd.add_table(rows=3, cols=2); rows = [("Item", "Amount, USD"), ("Materials", "48250"), ("Labour", "31000")]
 for i, (a, b) in enumerate(rows): tb.cell(i, 0).text = a; tb.cell(i, 1).text = b
-dd.add_paragraph("Ответственный: Иванова А. П."); dd.save(d / "report.docx")
-wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Бюджет"
-for r in (["Месяц", "Расход"], ["Январь", 1200], ["Февраль", 3400], ["Март", 560]): ws.append(r)
+dd.add_paragraph("Responsible person: Ivanova A. P."); dd.save(d / "report.docx")
+wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Budget"
+for r in (["Month", "Expense"], ["January", 1200], ["February", 3400], ["March", 560]): ws.append(r)
 wb.save(d / "budget.xlsx")
 long = openpyxl  # placeholder to keep names tidy
-ld = docx.Document(); ld.add_heading("Длинный регламент", 1)
-for i in range(1, 400): ld.add_paragraph(f"Пункт {i}. Стандартные положения регламента, ничего особенного здесь нет.")
-ld.add_paragraph("Секретное кодовое слово в конце регламента: ЛАЗУРИТ-58."); ld.save(d / "long.docx")
+ld = docx.Document(); ld.add_heading("Long regulation", 1)
+for i in range(1, 400): ld.add_paragraph(f"Item {i}. Standard provisions of the regulation, nothing special here.")
+ld.add_paragraph("The secret code word at the end of the regulation: LAPIS-58."); ld.save(d / "long.docx")
 db.add_root(str(d))
 asked = []
 QMessageBox.question = staticmethod(lambda p, t, text, *a, **k: (asked.append(text), QMessageBox.Yes)[1])
@@ -68,14 +68,14 @@ b = ctx.builder; wait(lambda: not b.models_req.busy)
 b.name.setText("p"); b.base_model.setCurrentText(MODEL); b.max_tokens.setValue(MAXTOK); b.temperature.setValue(0.7); b.max_steps.setValue(16); b.save_btn.click()
 tp.tree.topLevelItem(0).setCheckState(0, Qt.Checked)
 wait(lambda: not w.limit_req.busy, 20)
-print(f"\n##### {MODEL}; max_tokens {MAXTOK}; лимит контекста по данным сервера: {w._limit_info}; каталог ≈{tp.prompt_tokens()} ток.")
+print(f"\n##### {MODEL}; max_tokens {MAXTOK}; context limit reported by the server: {w._limit_info}; catalog ≈{tp.prompt_tokens()} tok.")
 
 usage_log = []
 orig_usage = w._on_usage
 def logging_usage(sid, prompt, completion, raw):
     usage_log.append((prompt, completion, raw)); orig_usage(sid, prompt, completion, raw)
 w._on_usage = logging_usage
-# thread.usage уже подключён к исходному bound-методу при создании потока: подменяем через обёртку ниже
+# thread.usage is already connected to the original bound method when the thread is created: it is replaced through the wrapper below
 orig_submit = w.on_submit
 import worker
 orig_init = worker.ChatStreamer.__init__
@@ -90,33 +90,33 @@ def ask(question):
     rows = db.list_messages(w.chat_id)[n0:]
     calls = [x for r in rows if r["role"] == "assistant" and r["tool_calls"] for x in json.loads(r["tool_calls"])]
     names = [(json.loads(x["function"]["arguments"] or "{}").get("tool") or x["function"]["name"]) for x in calls]
-    errors = [r for r in rows if r["role"] == "tool" and r["content"].startswith("ОШИБКА")]
+    errors = [r for r in rows if r["role"] == "tool" and r["content"].startswith("ERROR")]
     final = next((r for r in reversed(rows) if r["role"] == "assistant" and not r["tool_calls"]), None)
     sysrows = [r["content"] for r in rows if r["role"] == "system"]
-    print(f"\n=== {question[:110]!r}\n    {time.time()-t0:.0f} с, завершилось: {done}; вызовов: {len(calls)} ({', '.join(names)}); ошибок инструментов: {len(errors)}")
+    print(f"\n=== {question[:110]!r}\n    {time.time()-t0:.0f} s, finished: {done}; calls: {len(calls)} ({', '.join(names)}); tool errors: {len(errors)}")
     if usage_log:
-        print("    токены запросов (сервер / наша сырая оценка): " + "; ".join(f"{p}/{e}" for p, _, e in usage_log) + f"; поправка ×{w._scale.get(w._limit_key, 1.0):.2f}")
-    for r in errors: print("    ошибка:", r["content"][:140].replace("\n", " "))
-    for s in sysrows: print("    система:", s)
-    print("    ответ:", (final["content"] if final else "(нет)")[:380].replace("\n", " "))
-    return ((final["content"] or final["reasoning"] or "") if final else "", names, errors)  # Qwen 3.5 иногда кладёт ответ в reasoning
+        print("    request tokens (server / our raw estimate): " + "; ".join(f"{p}/{e}" for p, _, e in usage_log) + f"; correction ×{w._scale.get(w._limit_key, 1.0):.2f}")
+    for r in errors: print("    error:", r["content"][:140].replace("\n", " "))
+    for s in sysrows: print("    system:", s)
+    print("    answer:", (final["content"] if final else "(none)")[:380].replace("\n", " "))
+    return ((final["content"] or final["reasoning"] or "") if final else "", names, errors)  # Qwen 3.5 sometimes puts the answer in reasoning
 
 
 verdicts = []
 def expect(label, final_text, *needles):
     ok = all(n.lower() in (final_text or "").lower() for n in needles)
-    verdicts.append((label, ok)); print(f"    ПРОВЕРКА {label}: {'OK' if ok else 'FAIL'} (ждали: {', '.join(needles)})")
+    verdicts.append((label, ok)); print(f"    CHECK {label}: {'OK' if ok else 'FAIL'} (expected: {', '.join(needles)})")
 
-ra, names, _ = ask("Прочитай файл contract.pdf и скажи, какой там код доставки и на какой странице он указан.")
-expect("PDF: код доставки", ra, "KAPPA-731"); expect("PDF: вызван fs_read", " ".join(names), "fs_read")
-ra, names, _ = ask("Открой report.docx и назови сумму за материалы и фамилию ответственного.")
-expect("Word: таблица и абзац", "".join(ch for ch in ra if not ch.isspace()), "48250", "Иванова")
-ra, names, _ = ask("В budget.xlsx расходы по месяцам. Посчитай общий расход через калькулятор и назови число.")
-expect("Excel: сумма расходов 5160", "".join(ch for ch in ra if not ch.isspace()), "5160")
-ra, names, _ = ask("Файл long.docx длинный. Дочитай его до конца и назови секретное кодовое слово из последнего абзаца.")
-expect("длинный Word: чтение кусками через offset", ra, "ЛАЗУРИТ-58"); print("    вызовов fs_read:", sum(n.endswith("fs_read") for n in names))
-ra, names, errs = ask("Прочитай scan.pdf и перескажи, что там написано.")
-expect("скан: честно сказано, что текста нет", ra.lower(), "текст") if "скан" not in ra.lower() else expect("скан: честно сказано про скан", ra.lower(), "скан")
-print("\n##### ИТОГ:", "; ".join(f"{l}: {'OK' if ok else 'FAIL'}" for l, ok in verdicts))
-print("ALL OK" if all(ok for _, ok in verdicts) else "ЕСТЬ ПРОВАЛЫ")
+ra, names, _ = ask("Read the file contract.pdf and tell me the delivery code and which page it is on.")
+expect("PDF: delivery code", ra, "KAPPA-731"); expect("PDF: fs_read was called", " ".join(names), "fs_read")
+ra, names, _ = ask("Open report.docx and give the amount for materials and the surname of the person responsible.")
+expect("Word: table and paragraph", "".join(ch for ch in ra if not ch.isspace()), "48250", "Ivanova")
+ra, names, _ = ask("budget.xlsx has expenses by month. Add up the total expense with the calculator and give the number.")
+expect("Excel: total expense 5160", "".join(ch for ch in ra if not ch.isspace()), "5160")
+ra, names, _ = ask("The file long.docx is long. Read it to the end and give the secret code word from the last paragraph.")
+expect("long Word: reading in chunks with offset", ra, "LAPIS-58"); print("    fs_read calls:", sum(n.endswith("fs_read") for n in names))
+ra, names, errs = ask("Read scan.pdf and retell what it says.")
+expect("scan: honestly says there is no text", ra.lower(), "text") if "scan" not in ra.lower() else expect("scan: honestly says it is a scan", ra.lower(), "scan")
+print("\n##### SUMMARY:", "; ".join(f"{l}: {'OK' if ok else 'FAIL'}" for l, ok in verdicts))
+print("ALL OK" if all(ok for _, ok in verdicts) else "SOME FAILED")
 w.close()

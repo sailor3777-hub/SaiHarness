@@ -1,11 +1,11 @@
-"""HTML → читаемый текст (стандартная библиотека). Выбрасывает скрипты, навигацию и вёрстку, сохраняет структуру."""
+"""HTML → readable text (standard library). Drops scripts, navigation and layout, keeps the structure."""
 import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urldefrag
 
-HARD_SKIP = {"script", "style", "noscript", "svg", "template", "iframe", "canvas", "select"}  # ни текста, ни ссылок
-SOFT_SKIP = {"form", "nav", "footer", "aside"}  # текст выбрасывается, ссылки собираются (по ним краулер находит структуру сайта)
+HARD_SKIP = {"script", "style", "noscript", "svg", "template", "iframe", "canvas", "select"}  # neither text nor links
+SOFT_SKIP = {"form", "nav", "footer", "aside"}  # text is dropped, links are collected (the crawler finds the site structure through them)
 SOFT_ROLES = {"navigation", "banner", "contentinfo", "complementary", "search"}
 SOFT_NAMES = {"sidebar", "sphinxsidebar", "related", "navigation", "navbar", "nav", "breadcrumb", "breadcrumbs", "menu",
               "footer", "toc", "mw-editsection", "mw-jump-link", "vector-toc", "vector-header-container", "vector-page-toolbar",
@@ -25,7 +25,7 @@ class Page:
 
 
 def _is_soft(tag: str, attrs: dict) -> bool:
-    """Блок навигации или оформления по роли, классу или id (многие сайты, например Sphinx, не используют <nav>)."""
+    """A navigation or decoration block by role, class or id (many sites, Sphinx for example, do not use <nav>)."""
     if tag in VOID:
         return False
     if (attrs.get("role") or "").lower() in SOFT_ROLES:
@@ -38,9 +38,9 @@ class _Parser(HTMLParser):
     def __init__(self, base_url: str):
         super().__init__(convert_charrefs=True)
         self.base = base_url
-        self.skip = 0        # внутри HARD_SKIP
-        self.soft = 0        # внутри SOFT_SKIP-тегов
-        self.soft_tag = None  # корень блока, выбранного по классу/роли, и глубина вложенных тегов с тем же именем
+        self.skip = 0        # inside HARD_SKIP
+        self.soft = 0        # inside SOFT_SKIP tags
+        self.soft_tag = None  # root of a block chosen by class/role, and the depth of nested tags with the same name
         self.soft_nest = 0
         self.in_title = False
         self.title_parts: list[str] = []
@@ -138,7 +138,7 @@ def _clean(parts: list[str]) -> str:
     lines = [re.sub(r"[ \t]+", " ", ln).strip(" \t") for ln in text.split("\n")]
     out, blank = [], 0
     for ln in lines:
-        if ln == "-":  # пустой пункт списка (иконка или ссылка без текста)
+        if ln == "-":  # an empty list item (an icon or a link without text)
             continue
         if ln:
             out.append(ln)
@@ -147,7 +147,7 @@ def _clean(parts: list[str]) -> str:
             blank += 1
             if blank == 1 and out:
                 out.append("")
-    return "\n".join(out).strip().replace(" ", " ")  # неразрывные пробелы — это отступы из <pre>
+    return "\n".join(out).strip().replace(" ", " ")  # non-breaking spaces are indentation from <pre>
 
 
 def extract(html: str, base_url: str = "") -> Page:

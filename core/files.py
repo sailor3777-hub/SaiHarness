@@ -1,8 +1,8 @@
-"""Файлы в контексте чата: выбор галочками, обход папок, чтение и оценка размера.
+"""Files in the chat context: selection with checkboxes, folder traversal, reading and size estimation.
 
-Выбор хранится как два набора путей: include (отмеченные) и exclude (исключённые внутри отмеченной
-папки). Папка с галочкой означает «все текстовые файлы внутри», исключения снимают отдельные узлы.
-Пути берутся из os.scandir/os.walk от корней и сравниваются как строки.
+The selection is stored as two sets of paths: include (checked) and exclude (excluded inside a checked
+folder). A checked folder means "all text files inside"; exclusions uncheck individual nodes.
+Paths come from os.scandir/os.walk starting at the roots and are compared as strings.
 """
 import errno
 import math
@@ -11,6 +11,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from core import docs
+from core.markers import NOT_FOUND
 
 IGNORE_DIRS = {
     ".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv", ".idea", ".vscode",
@@ -24,16 +25,16 @@ BINARY_EXT = {
     ".mp3", ".wav", ".flac", ".ogg", ".mp4", ".mkv", ".avi", ".mov", ".webm",
     ".ttf", ".otf", ".woff", ".woff2", ".gguf", ".safetensors", ".pt", ".onnx", ".npy", ".npz",
 }
-IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}  # совпадает с core.vision.IMAGE_EXTENSIONS
-MAX_FILE_BYTES = 300_000      # файл крупнее не берём целиком
-MAX_FILES = 2000              # защита от случайного выбора всего диска
+IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}  # same as core.vision.IMAGE_EXTENSIONS
+MAX_FILE_BYTES = 300_000      # a larger file is not taken whole
+MAX_FILES = 2000              # protection against accidentally selecting the whole disk
 MAX_TOTAL_CHARS = 3_000_000
 
-CHECKED, PARTIAL, UNCHECKED = 2, 1, 0  # совпадает с Qt.CheckState
+CHECKED, PARTIAL, UNCHECKED = 2, 1, 0  # same as Qt.CheckState
 
 
-# Токенов на один символ каждого класса. Подобрано по замерам реальных моделей (Qwen 3.5/3.6, Gemma 4 считают
-# почти одинаково) на 46 образцах: проза, код, таблицы, логи, JSON. Медиана ошибки ≈6%, 90-й перцентиль ≈15%.
+# Tokens per character of each class. Fitted on measurements of real models (Qwen 3.5/3.6 and Gemma 4 count
+# almost the same) on 46 samples: prose, code, tables, logs, JSON. Median error ≈6%, 90th percentile ≈15%.
 _TOKENS_PER_CHAR = {
     "cyrillic": 0.310, "latin": 0.199, "digit": 1.244, "space": 0.017,
     "newline": 0.637, "ascii_other": 0.756, "non_ascii_other": 1.177,
@@ -41,7 +42,7 @@ _TOKENS_PER_CHAR = {
 
 
 def _char_class(ch: str) -> str:
-    if "Ѐ" <= ch <= "ӿ":
+    if "\u0400" <= ch <= "\u04ff":
         return "cyrillic"
     if ch.isascii():
         if ch.isalpha():
@@ -55,11 +56,11 @@ def _char_class(ch: str) -> str:
 
 
 def estimate_tokens(text: str) -> int:
-    """Оценка числа токенов без токенизатора модели (порядок ±15%; реальное число сообщает сервер в usage)."""
+    """Token estimate without the model's tokenizer (about ±15%; the server reports the real number in usage)."""
     if not text:
         return 0
     total = 0.0
-    for ch, n in Counter(text).items():  # по уникальным символам: быстро даже для миллионов символов
+    for ch, n in Counter(text).items():  # by unique characters: fast even for millions of characters
         total += _TOKENS_PER_CHAR[_char_class(ch)] * n
     return math.ceil(total)
 
@@ -73,15 +74,15 @@ def is_image_name(name: str) -> bool:
 
 
 def binary_placeholder(path: str) -> str:
-    """Вместо содержимого бинарного файла модель получает путь: картинку она смотрит через vision_describe."""
+    """Instead of a binary file's content the model gets its path: it looks at a picture with vision_describe."""
     try:
-        size = f", {os.path.getsize(path) // 1024} КБ"
+        size = f", {os.path.getsize(path) // 1024} KB"
     except OSError:
         size = ""
-    hint = ("Содержимое не вставлено, это изображение: посмотри его инструментом vision_describe, если он есть."
-            if is_image_name(path) else "Содержимое не вставлено: файл бинарный, не текстовый.")
-    kind = "изображение" if is_image_name(path) else "бинарный файл"
-    return "\n".join([f"[{kind}{size}]", f"Путь: {path}", hint])
+    hint = ("Content not included, this is an image: look at it with the vision_describe tool if it is available."
+            if is_image_name(path) else "Content not included: the file is binary, not text.")
+    kind = "image" if is_image_name(path) else "binary file"
+    return "\n".join([f"[{kind}{size}]", f"Path: {path}", hint])
 
 
 def looks_binary_by_name(name: str) -> bool:
@@ -89,7 +90,7 @@ def looks_binary_by_name(name: str) -> bool:
 
 
 class Selection:
-    """Набор отмеченных и исключённых путей с наследованием отметки от папок."""
+    """The set of checked and excluded paths, with the check inherited from folders."""
 
     def __init__(self, include=(), exclude=()):
         self.include: set[str] = set(include)
@@ -102,7 +103,7 @@ class Selection:
         return not self.include
 
     def decision(self, path: str) -> bool:
-        """Входит ли путь в выбор: решает ближайший отмеченный или исключённый узел вверх по дереву."""
+        """Whether a path is in the selection: the nearest checked or excluded node up the tree decides."""
         p = path
         while True:
             if p in self.exclude:
@@ -134,7 +135,7 @@ class Selection:
             self.exclude.add(path)
 
     def prune(self, existing_roots: list[str]):
-        """Убрать записи, которые не лежат ни в одном из корней (корень удалён из списка)."""
+        """Drop entries that are under none of the roots (the root was removed from the list)."""
         def inside(p):
             return any(p == r or p.startswith(r + os.sep) for r in existing_roots)
         self.include = {p for p in self.include if inside(p)}
@@ -143,9 +144,9 @@ class Selection:
 
 @dataclass
 class ContextBundle:
-    files: list[tuple[str, str]] = field(default_factory=list)  # (имя для показа, текст)
-    skipped: list[tuple[str, str]] = field(default_factory=list)  # (путь, причина)
-    truncated: bool = False  # выбор оказался больше лимитов MAX_FILES / MAX_TOTAL_CHARS
+    files: list[tuple[str, str]] = field(default_factory=list)  # (display name, text)
+    skipped: list[tuple[str, str]] = field(default_factory=list)  # (path, reason)
+    truncated: bool = False  # the selection exceeded the MAX_FILES / MAX_TOTAL_CHARS limits
 
     @property
     def chars(self) -> int:
@@ -157,49 +158,49 @@ class ContextBundle:
 
 
 def read_text_file(path: str) -> tuple[str | None, str]:
-    """Читает текстовый файл. Возвращает (текст, '') или (None, причина пропуска)."""
+    """Reads a text file. Returns (text, '') or (None, skip reason)."""
     try:
         size = os.path.getsize(path)
         if size > MAX_FILE_BYTES:
-            return None, f"слишком большой ({size // 1024} КБ)"
+            return None, f"too large ({size // 1024} KB)"
         with open(path, "rb") as f:
             raw = f.read()
     except FileNotFoundError:
-        return None, "файл не найден"
+        return None, NOT_FOUND
     except PermissionError:
-        return None, "нет доступа к файлу"
+        return None, "no access to the file"
     except OSError as e:
-        # текст e.strerror зависит от языка Windows (бывает немецким), поэтому берём код ошибки
-        return None, f"не читается ({errno.errorcode.get(e.errno, 'ошибка ввода-вывода')})"
+        # the e.strerror text depends on the Windows language (it can be German), so the error code is used
+        return None, f"cannot be read ({errno.errorcode.get(e.errno, 'I/O error')})"
     utf16 = raw.startswith((b"\xff\xfe", b"\xfe\xff"))
     if not utf16 and _looks_binary(raw):
-        return None, "бинарный"
+        return None, "binary"
     for enc in ("utf-8-sig", "utf-16") if utf16 else ("utf-8-sig",):
         try:
             return raw.decode(enc).replace("\x00", ""), ""
         except UnicodeDecodeError:
             pass
-    return raw.decode("cp1251", errors="replace").replace("\x00", ""), ""  # типичная кодировка старых русских файлов
+    return raw.decode("cp1251", errors="replace").replace("\x00", ""), ""  # the usual encoding of old Russian files
 
 
 def _looks_binary(raw: bytes) -> bool:
-    """Бинарный файл: NUL-байтов больше 1% начала. Редкие NUL (заголовок или добивка нулями, как в
-    DumpStack.log) файл бинарным не делают: они вырезаются из прочитанного текста."""
+    """A binary file: NUL bytes make up more than 1% of the start. Rare NULs (a header or zero padding, as in
+    DumpStack.log) do not make a file binary: they are cut out of the text that was read."""
     sample = raw[:8192].rstrip(b"\x00")
     return sample.count(b"\x00") * 100 > len(sample)
 
 
 def decode_for_edit(raw: bytes) -> tuple[str, str] | tuple[None, str]:
-    """Декодирует файл для правки так, чтобы его можно было записать обратно без искажений.
+    """Decodes a file for editing so that it can be written back without distortion.
 
-    Возвращает (текст, кодировка) или (None, причина отказа). Поддерживаются UTF-8 (с BOM и без)
-    и cp1251, в которой строго декодируется всё, что не является UTF-8: обратное кодирование
-    возвращает исходные байты. UTF-16 и бинарные файлы не правятся.
+    Returns (text, encoding) or (None, reason for refusal). Supported: UTF-8 (with or without BOM)
+    and cp1251, which strictly decodes everything that is not UTF-8: encoding back
+    returns the original bytes. UTF-16 and binary files are not edited.
     """
     if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
-        return None, "кодировка UTF-16 для правки не поддерживается"
+        return None, "UTF-16 encoding is not supported for editing"
     if b"\x00" in raw[:8192]:
-        return None, "бинарный файл"
+        return None, "binary file"
     encoding = "utf-8-sig" if raw.startswith(b"\xef\xbb\xbf") else "utf-8"
     try:
         return raw.decode(encoding), encoding
@@ -208,7 +209,7 @@ def decode_for_edit(raw: bytes) -> tuple[str, str] | tuple[None, str]:
     try:
         return raw.decode("cp1251"), "cp1251"
     except UnicodeDecodeError:
-        return None, "не удалось определить кодировку без потерь"
+        return None, "could not determine the encoding without loss"
 
 
 def _display_name(path: str, roots: list[str]) -> str:
@@ -221,7 +222,7 @@ def _display_name(path: str, roots: list[str]) -> str:
 
 
 def expand_selection(sel: Selection, roots: list[str]) -> tuple[list[str], bool, list[str]]:
-    """Файлы, попавшие в выбор (без служебных папок), признак усечения и отмеченные пути, которых нет на диске."""
+    """Files in the selection (without service folders), a truncation flag and checked paths missing on disk."""
     found: dict[str, None] = {}
     missing: list[str] = []
     truncated = False
@@ -242,7 +243,7 @@ def expand_selection(sel: Selection, roots: list[str]) -> tuple[list[str], bool,
                     if not sel.decision(full):
                         continue
                     if looks_binary_by_name(name) and not is_image_name(name):
-                        continue  # из папки берутся текст и картинки; прочие бинарные файлы только если отмечены явно
+                        continue  # text and images are taken from a folder; other binary files only if checked explicitly
                     found[full] = None
                     if len(found) >= MAX_FILES:
                         return list(found), True, missing
@@ -250,18 +251,18 @@ def expand_selection(sel: Selection, roots: list[str]) -> tuple[list[str], bool,
 
 
 def load_context(sel: Selection, roots: list[str]) -> ContextBundle:
-    """Читает выбранные файлы с учётом лимитов. Вызывать из фонового потока для больших выборов."""
+    """Reads the selected files within the limits. Call from a background thread for large selections."""
     bundle = ContextBundle()
     if sel.is_empty():
         return bundle
     paths, bundle.truncated, missing = expand_selection(sel, roots)
-    bundle.skipped += [(p, "не найден на диске") for p in missing]
+    bundle.skipped += [(p, "not found on disk") for p in missing]
     total = 0
     for path in paths:
         if docs.is_document_name(path):
             text, reason = docs.read_document_cached(path)
             if text is not None and len(text) > MAX_FILE_BYTES:
-                text, reason = None, f"слишком большой текст документа ({len(text) // 1024} КБ)"
+                text, reason = None, f"document text too large ({len(text) // 1024} KB)"
         elif looks_binary_by_name(path):
             text, reason = binary_placeholder(path), ""
         else:
@@ -271,7 +272,7 @@ def load_context(sel: Selection, roots: list[str]) -> ContextBundle:
             continue
         if total + len(text) > MAX_TOTAL_CHARS:
             bundle.truncated = True
-            bundle.skipped.append((path, "превышен общий лимит объёма"))
+            bundle.skipped.append((path, "total size limit exceeded"))
             continue
         total += len(text)
         bundle.files.append((_display_name(path, roots), text))
@@ -279,7 +280,7 @@ def load_context(sel: Selection, roots: list[str]) -> ContextBundle:
 
 
 def summarize(include: frozenset, exclude: frozenset, roots: tuple) -> dict:
-    """Сводка выбора для интерфейса (запускается в фоне): число файлов, объём, оценка токенов."""
+    """Selection summary for the interface (runs in the background): number of files, size, token estimate."""
     bundle = load_context(Selection(include, exclude), list(roots))
     return {
         "files": len(bundle.files), "chars": bundle.chars, "tokens": bundle.tokens,

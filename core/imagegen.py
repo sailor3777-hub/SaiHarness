@@ -1,15 +1,15 @@
-"""Генерация изображений через ComfyUI (чистый Python, без Qt).
+"""Image generation through ComfyUI (pure Python, no Qt).
 
-Инструмент image_generate из tools_server.py берёт workflow в API-формате (Save (API Format) в ComfyUI, тот же JSON,
-что загружен в Open WebUI), подставляет в него текст, размер и случайный seed, отправляет на `POST /prompt`, ждёт
-результат в `/history/<id>` и сохраняет картинку в data/images.
+The image_generate tool in tools_server.py takes a workflow in API format (Save (API Format) in ComfyUI, the same JSON
+that is loaded into Open WebUI), puts the text, size and a random seed into it, sends it to `POST /prompt`, waits
+for the result in `/history/<id>` and saves the picture to data/images.
 
-Сопоставления узлов вручную нет: нужные узлы находятся по типу и связям. Текст идёт в CLIPTextEncode, на который
-ссылается positive у KSampler (через промежуточные узлы вроде FluxGuidance), размер — в узел пустого латента, к
-которому подключён сэмплер, seed и шаги — в сам KSampler. Поэтому подойдёт любой workflow такой формы.
+There is no manual node mapping: the needed nodes are found by type and links. The text goes to the CLIPTextEncode
+referenced by the KSampler's positive input (through intermediate nodes such as FluxGuidance), the size goes to the
+empty latent node the sampler is connected to, seed and steps go to the KSampler itself. So any workflow of this shape works.
 
-Адрес сервера хранится в app_settings (`comfy_url`), workflow лежит в data/comfy_workflow.json (путь можно
-переопределить переменной SAI_COMFY_WORKFLOW).
+The server address is stored in app_settings (`comfy_url`), the workflow lives in data/comfy_workflow.json (the path
+can be overridden with the SAI_COMFY_WORKFLOW variable).
 """
 import copy
 import json
@@ -28,25 +28,29 @@ from core import images
 COMFY_URL_KEY = "comfy_url"
 WORKFLOW_PATH = Path(__file__).resolve().parent.parent / "data" / "comfy_workflow.json"
 DEFAULT_SIZE = 512
-MIN_SIDE, MAX_SIDE, MAX_PIXELS = 64, 1536, 1024 * 1024  # GTX 1650 с 4 ГБ: больше мегапикселя не вытянуть
-SIDE_STEP = 8                # латент делится на 8; размер от модели (200×200, 640×384) сохраняется как есть, если кратен 8
-TOTAL_TIMEOUT = 900.0        # первый запуск грузит модели с диска, на слабой карте это минуты
+MIN_SIDE, MAX_SIDE, MAX_PIXELS = 64, 1536, 1024 * 1024  # a GTX 1650 with 4 GB cannot do more than a megapixel
+SIDE_STEP = 8                # the latent is divided by 8; a size from the model (200×200, 640×384) is kept as is if it is a multiple of 8
+TOTAL_TIMEOUT = 900.0        # the first run loads models from disk, which takes minutes on a weak GPU
 POLL_SECONDS = 1.0
 SAMPLERS = ("KSampler", "KSamplerAdvanced")
 TEXT_NODES = ("CLIPTextEncode",)
-MAX_HOPS = 6                 # сколько узлов проходим от positive сэмплера до текстового
+MAX_HOPS = 6                 # how many nodes to walk from the sampler's positive input to the text node
 
 
-RESULT_PREFIX = "Изображение готово и сохранено: "   # по нему чат находит путь в результате инструмента и показывает картинку
+RESULT_PREFIX = "Image is ready and saved: "   # the chat finds the path in a tool result by this prefix and shows the picture
+LEGACY_RESULT_PREFIXES: tuple[str, ...] = ("Изображение готово и сохранено: ",)  # earlier wordings (Russian version): pictures in old chats are shown too
 
 
 def result_path(text: str) -> str:
-    """Путь к картинке из результата image_generate; пусто, если это не успешный результат."""
-    return text.split(RESULT_PREFIX, 1)[1].strip() if text.startswith(RESULT_PREFIX) else ""
+    """Path to the picture from an image_generate result; empty if this is not a successful result."""
+    for prefix in (RESULT_PREFIX, *LEGACY_RESULT_PREFIXES):
+        if text.startswith(prefix):
+            return text[len(prefix):].strip()
+    return ""
 
 
 class ImageGenError(Exception):
-    """Сгенерировать не удалось; текст понятен и пользователю, и модели."""
+    """Generation failed; the text is clear to both the user and the model."""
 
 
 @dataclass
@@ -56,16 +60,16 @@ class ImageGenConfig:
 
 
 def normalize_url(raw: str) -> str:
-    """'192.168.1.5:8188' → 'http://192.168.1.5:8188' (без хвостового слэша)."""
+    """'192.168.1.5:8188' → 'http://192.168.1.5:8188' (without a trailing slash)."""
     url = raw.strip().rstrip("/")
     if not url:
-        raise ValueError("адрес пуст")
+        raise ValueError("the address is empty")
     if "://" not in url:
         url = "http://" + url
     if not url.lower().startswith(("http://", "https://")):
-        raise ValueError("нужен адрес http:// или https://")
+        raise ValueError("an http:// or https:// address is required")
     if not httpx.URL(url).host:
-        raise ValueError("в адресе нет хоста")
+        raise ValueError("the address has no host")
     return url
 
 
@@ -74,13 +78,13 @@ def load_workflow(path: Path | None = None) -> dict:
     try:
         workflow = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        raise ImageGenError(f"Нет файла workflow: {path}. Сохрани его из ComfyUI через Save (API Format).") from None
+        raise ImageGenError(f"No workflow file: {path}. Save it from ComfyUI with Save (API Format).") from None
     except (OSError, ValueError) as e:
-        raise ImageGenError(f"Workflow не читается ({e.__class__.__name__}): {path}") from None
+        raise ImageGenError(f"The workflow cannot be read ({e.__class__.__name__}): {path}") from None
     if not isinstance(workflow, dict) or not workflow or not all(isinstance(n, dict) and "class_type" in n
                                                                   for n in workflow.values()):
-        raise ImageGenError("Workflow не в API-формате: нужен JSON вида {«id узла»: {class_type, inputs}}. "
-                            "В ComfyUI это Save (API Format), а не обычное сохранение.")
+        raise ImageGenError("The workflow is not in API format: a JSON like {\"node id\": {class_type, inputs}} is required. "
+                            "In ComfyUI this is Save (API Format), not the regular save.")
     return workflow
 
 
@@ -96,23 +100,23 @@ def load_config(db_path, workflow_path: Path | None = None) -> ImageGenConfig:
         finally:
             con.close()
     if not url:
-        raise ImageGenError("Генерация изображений не настроена: пользователь должен задать адрес ComfyUI "
-                            "во вкладке «Инструменты» (блок «Картинки»).")
+        raise ImageGenError("Image generation is not set up: the user must enter the ComfyUI address "
+                            "on the Tools tab (the \"Images\" section).")
     return ImageGenConfig(url, load_workflow(workflow_path))
 
 
-# --- разбор workflow ---
+# --- parsing the workflow ---
 
 def _link(value):
-    """Ссылка на выход другого узла в API-формате: ['id', индекс]."""
+    """A link to another node's output in API format: ['id', index]."""
     return value[0] if isinstance(value, list) and len(value) == 2 and isinstance(value[0], str) else None
 
 
 def find_nodes(workflow: dict) -> dict:
-    """id узлов, куда подставляются значения: sampler, text, latent. Нет нужного узла: ImageGenError."""
+    """ids of the nodes that receive the values: sampler, text, latent. A missing node raises ImageGenError."""
     sampler_id = next((i for i, n in workflow.items() if n["class_type"] in SAMPLERS), None)
     if sampler_id is None:
-        raise ImageGenError("В workflow нет узла KSampler: не понятно, куда подставлять seed и шаги.")
+        raise ImageGenError("The workflow has no KSampler node: it is unclear where to put the seed and steps.")
     inputs = workflow[sampler_id].get("inputs", {})
     node_id = _link(inputs.get("positive"))
     for _ in range(MAX_HOPS):
@@ -123,16 +127,16 @@ def find_nodes(workflow: dict) -> dict:
         node_id = _link(node_inputs.get("conditioning")) or next(
             (l for l in map(_link, node_inputs.values()) if l in workflow), None)
     if not node_id or workflow.get(node_id, {}).get("class_type") not in TEXT_NODES:
-        raise ImageGenError("В workflow не нашёлся текстовый узел CLIPTextEncode, подключённый к positive у KSampler.")
+        raise ImageGenError("The workflow has no CLIPTextEncode text node connected to the KSampler's positive input.")
     latent_id = _link(inputs.get("latent_image"))
     latent = workflow.get(latent_id) if latent_id else None
     if latent is None or not {"width", "height"} <= set(latent.get("inputs", {})):
-        raise ImageGenError("К KSampler не подключён узел пустого латента с width и height (EmptyLatentImage и подобные).")
+        raise ImageGenError("No empty latent node with width and height (EmptyLatentImage and similar) is connected to the KSampler.")
     return {"sampler": sampler_id, "text": node_id, "latent": latent_id}
 
 
 def clamp_size(width: int, height: int) -> tuple[int, int]:
-    """Сторона в [MIN_SIDE, MAX_SIDE], кратная SIDE_STEP; площадь не больше MAX_PIXELS (пропорции сохраняются)."""
+    """A side within [MIN_SIDE, MAX_SIDE], a multiple of SIDE_STEP; the area is at most MAX_PIXELS (proportions are kept)."""
     w, h = max(MIN_SIDE, min(MAX_SIDE, int(width))), max(MIN_SIDE, min(MAX_SIDE, int(height)))
     if w * h > MAX_PIXELS:
         k = (MAX_PIXELS / (w * h)) ** 0.5
@@ -143,9 +147,9 @@ def clamp_size(width: int, height: int) -> tuple[int, int]:
 
 def build_prompt(workflow: dict, text: str, width: int = DEFAULT_SIZE, height: int = DEFAULT_SIZE,
                  steps: int | None = None, seed: int | None = None) -> dict:
-    """Копия workflow с подставленными значениями. Шаги берутся из workflow, пока не заданы явно."""
+    """A copy of the workflow with the values filled in. Steps come from the workflow unless given explicitly."""
     if not text.strip():
-        raise ImageGenError("prompt пуст: опиши, что нарисовать.")
+        raise ImageGenError("prompt is empty: describe what to draw.")
     ids = find_nodes(workflow)
     out = copy.deepcopy(workflow)
     out[ids["text"]]["inputs"]["text"] = text.strip()
@@ -157,16 +161,16 @@ def build_prompt(workflow: dict, text: str, width: int = DEFAULT_SIZE, height: i
     return out
 
 
-# --- общение с ComfyUI ---
+# --- talking to ComfyUI ---
 
 def _node_errors(payload: dict) -> str:
-    """Человеческий текст из ответа ComfyUI на невалидный prompt (error + node_errors)."""
+    """Readable text from ComfyUI's reply to an invalid prompt (error + node_errors)."""
     err = payload.get("error")
     parts = [err.get("message") or err.get("type") or "" if isinstance(err, dict) else str(err or "")]
     for node_id, info in (payload.get("node_errors") or {}).items():
         for e in info.get("errors", []):
-            parts.append(f"узел {node_id} ({info.get('class_type')}): {e.get('message')} {e.get('details') or ''}".strip())
-    return "; ".join(p for p in parts if p)[:600] or "без пояснения"
+            parts.append(f"node {node_id} ({info.get('class_type')}): {e.get('message')} {e.get('details') or ''}".strip())
+    return "; ".join(p for p in parts if p)[:600] or "no explanation"
 
 
 def _history_error(entry: dict) -> str:
@@ -179,7 +183,7 @@ def _history_error(entry: dict) -> str:
 def generate(cfg: ImageGenConfig, text: str, width: int = DEFAULT_SIZE, height: int = DEFAULT_SIZE,
              steps: int | None = None, seed: int | None = None, transport=None,
              timeout: float = TOTAL_TIMEOUT, poll: float = POLL_SECONDS) -> Path:
-    """Рисует картинку и возвращает путь к файлу в data/images."""
+    """Draws a picture and returns the path to the file in data/images."""
     prompt = build_prompt(cfg.workflow, text, width, height, steps, seed)
     base = cfg.base_url.rstrip("/")
     try:
@@ -190,39 +194,39 @@ def generate(cfg: ImageGenConfig, text: str, width: int = DEFAULT_SIZE, height: 
                     detail = _node_errors(r.json())
                 except ValueError:
                     detail = f"HTTP {r.status_code}"
-                raise ImageGenError(f"ComfyUI не принял workflow: {detail}.")
+                raise ImageGenError(f"ComfyUI did not accept the workflow: {detail}.")
             try:
                 prompt_id = r.json()["prompt_id"]
             except (ValueError, KeyError, TypeError):
-                raise ImageGenError("ComfyUI вернул непонятный ответ на /prompt.") from None
+                raise ImageGenError("ComfyUI returned an unexpected reply to /prompt.") from None
             deadline = time.monotonic() + timeout
             while True:
                 h = client.get(f"{base}/history/{prompt_id}")
                 entry = (h.json() if h.status_code == 200 else {}).get(prompt_id)
                 if entry and entry.get("status", {}).get("status_str") == "error":
-                    raise ImageGenError(f"ComfyUI не смог сгенерировать: {_history_error(entry) or 'ошибка выполнения'}. "
-                                        "Если видеокарта занята моделью в LM Studio, не хватило видеопамяти.")
+                    raise ImageGenError(f"ComfyUI could not generate the image: {_history_error(entry) or 'execution error'}. "
+                                        "If the GPU is busy with a model in LM Studio, there was not enough video memory.")
                 if entry and entry.get("outputs"):
                     break
                 if time.monotonic() > deadline:
-                    raise ImageGenError(f"ComfyUI не ответил за {timeout:g} с.")
+                    raise ImageGenError(f"ComfyUI did not answer within {timeout:g} s.")
                 time.sleep(poll)
             files = [i for out in entry["outputs"].values() for i in out.get("images", []) if i.get("type") != "temp"]
             if not files:
-                raise ImageGenError("ComfyUI завершил работу, но не отдал картинку (в workflow нет SaveImage?).")
+                raise ImageGenError("ComfyUI finished but returned no picture (is there no SaveImage in the workflow?).")
             f = files[0]
             v = client.get(f"{base}/view", params={"filename": f["filename"], "subfolder": f.get("subfolder", ""),
                                                    "type": f.get("type", "output")})
             if v.status_code != 200 or not v.content:
-                raise ImageGenError(f"Не удалось забрать картинку у ComfyUI (HTTP {v.status_code}).")
+                raise ImageGenError(f"Could not fetch the picture from ComfyUI (HTTP {v.status_code}).")
     except (httpx.ConnectError, httpx.ConnectTimeout):
-        raise ImageGenError(f"Нет связи с ComfyUI по адресу {cfg.base_url}: возможно, он выключен.") from None
+        raise ImageGenError(f"Cannot reach ComfyUI at {cfg.base_url}: it may be turned off.") from None
     except httpx.HTTPError as e:
-        raise ImageGenError(f"Ошибка связи с ComfyUI: {e.__class__.__name__}") from None
+        raise ImageGenError(f"Error talking to ComfyUI: {e.__class__.__name__}") from None
     ext = Path(f["filename"]).suffix.lower() or ".png"
     path = images.new_image_path(ext)
     try:
         path.write_bytes(v.content)
     except OSError as e:
-        raise ImageGenError(f"Не удалось сохранить картинку ({e.__class__.__name__}): {path}") from None
+        raise ImageGenError(f"Could not save the picture ({e.__class__.__name__}): {path}") from None
     return path

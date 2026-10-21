@@ -10,25 +10,25 @@ from core import db
 from core.memory import Memory, MemoryInputError
 
 ID_ROLE = Qt.UserRole
-ALL_TOPICS = "Все темы"
+ALL_TOPICS = "All topics"
 SEARCH_LIMIT = 200
 
 
 class MemoryPanel(QWidget):
-    """Долгосрочная память агента: просмотр, поиск, правка и удаление записей без участия модели."""
+    """The agent's long-term memory: view, search, edit and delete entries without the model."""
 
     def __init__(self):
         super().__init__()
         self._loading = False
 
         self.query = QLineEdit()
-        self.query.setPlaceholderText("Поиск по памяти")
+        self.query.setPlaceholderText("Search memory")
         self.query.setClearButtonEnabled(True)
         self.topic_filter = QComboBox()
-        self.refresh_btn = QPushButton("Обновить")
+        self.refresh_btn = QPushButton("Refresh")
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Тема", "Заголовок", "Обновлено"])
+        self.tree.setHeaderLabels(["Topic", "Title", "Updated"])
         self.tree.setRootIsDecorated(False)
         self.tree.setColumnWidth(0, 110)
         self.tree.setColumnWidth(1, 170)
@@ -36,14 +36,14 @@ class MemoryPanel(QWidget):
         self.info.setWordWrap(True)
 
         self.topic = QLineEdit()
-        self.topic.setPlaceholderText("Тема")
+        self.topic.setPlaceholderText("Topic")
         self.title = QLineEdit()
-        self.title.setPlaceholderText("Заголовок")
+        self.title.setPlaceholderText("Title")
         self.text = QPlainTextEdit()
-        self.text.setPlaceholderText("Что запомнить: самодостаточный текст, понятный без исходного разговора")
-        self.new_btn = QPushButton("Новая запись")
-        self.save_btn = QPushButton("Сохранить")
-        self.delete_btn = QPushButton("Удалить")
+        self.text.setPlaceholderText("What to remember: self-contained text that makes sense without the original conversation")
+        self.new_btn = QPushButton("New entry")
+        self.save_btn = QPushButton("Save")
+        self.delete_btn = QPushButton("Delete")
         self.status = QLabel("")
         self.status.setWordWrap(True)
 
@@ -76,12 +76,12 @@ class MemoryPanel(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        self.reload()  # записи добавляет модель из другого процесса: при открытии вкладки читаем заново
+        self.reload()  # the model adds entries from another process: re-read when the tab is opened
 
-    # --- список ---
+    # --- list ---
 
     def reload(self):
-        """Перечитывает темы и записи из базы, сохраняя фильтр и выбранную запись."""
+        """Re-reads topics and entries from the database, keeping the filter and the selected entry."""
         self._load_topics(keep_filter=True)
         self._fill_list(select=self.current_id())
 
@@ -120,22 +120,22 @@ class MemoryPanel(QWidget):
             if r["id"] == select:
                 chosen = item
         self.tree.blockSignals(False)
-        shown = f"показано {len(rows)} из {total}" if (query or topic) else f"записей: {total}"
-        self.info.setText(shown if total else "Память пуста. Попроси агента «запомни это» (нужны инструменты memory_* "
-                                              "во вкладке «Тулы») или добавь запись здесь.")
+        shown = f"showing {len(rows)} of {total}" if (query or topic) else f"entries: {total}"
+        self.info.setText(shown if total else "Memory is empty. Ask the agent to \"remember this\" (the memory_* tools "
+                                              "must be on, Tools tab) or add an entry here.")
         if chosen is not None:
-            self.tree.blockSignals(True)  # без перечитывания: в редакторе может быть несохранённый текст
+            self.tree.blockSignals(True)  # without re-reading: the editor may hold unsaved text
             self.tree.setCurrentItem(chosen)
             self.tree.blockSignals(False)
         elif select is not None:
-            self._new()  # выбранной записи больше нет (удалена или отфильтрована)
+            self._new()  # the selected entry is gone (deleted or filtered out)
         self._update_buttons()
 
     def current_id(self) -> int | None:
         item = self.tree.currentItem()
         return item.data(0, ID_ROLE) if item is not None else None
 
-    # --- редактор ---
+    # --- editor ---
 
     def _show(self, item):
         if item is None:
@@ -148,7 +148,7 @@ class MemoryPanel(QWidget):
         self.topic.setText(row["topic"])
         self.title.setText(row["title"])
         self.text.setPlainText(row["text"])
-        self.status.setText(f"№{row['id']} · создана {row['created_at'][:16]} · обновлена {row['updated_at'][:16]}")
+        self.status.setText(f"#{row['id']} · created {row['created_at'][:16]} · updated {row['updated_at'][:16]}")
         self._update_buttons()
 
     def _new(self):
@@ -159,7 +159,7 @@ class MemoryPanel(QWidget):
         self.topic.setText(self.topic_filter.currentData() or "")
         self.title.clear()
         self.text.clear()
-        self.status.setText("Новая запись")
+        self.status.setText("New entry")
         self._update_buttons()
         self.title.setFocus()
 
@@ -177,13 +177,13 @@ class MemoryPanel(QWidget):
                     mem.update(current, self.topic.text(), self.title.text(), self.text.toPlainText())
                     saved, updated = current, True
         except MemoryInputError as e:
-            self.status.setText(f"Не сохранено: {e}")
+            self.status.setText(f"Not saved: {e}")
             return
         self.reload_keeping(saved)
-        self.status.setText(f"{'Обновлена' if updated else 'Добавлена'} запись №{saved}")
+        self.status.setText(f"{'Updated' if updated else 'Added'} entry #{saved}")
 
     def reload_keeping(self, memory_id: int):
-        """Перечитывает список и выбирает запись; фильтры снимаются: после правки запись могла уйти из выбранной темы."""
+        """Re-reads the list and selects the entry; filters are cleared: after editing the entry may have left the selected topic."""
         self.query.blockSignals(True)
         self.query.clear()
         self.query.blockSignals(False)
@@ -194,11 +194,11 @@ class MemoryPanel(QWidget):
         current = self.current_id()
         if current is None:
             return
-        answer = QMessageBox.question(self, "Удалить запись", f"Удалить запись «{self.title.text()}» из памяти? Это необратимо.")
+        answer = QMessageBox.question(self, "Delete entry", f"Delete the entry \"{self.title.text()}\" from memory? This cannot be undone.")
         if answer != QMessageBox.Yes:
             return
         with closing(db.connect()) as conn:
             Memory(conn).delete(current)
         self.reload()
         self._new()
-        self.status.setText(f"Запись №{current} удалена")
+        self.status.setText(f"Entry #{current} deleted")

@@ -14,13 +14,13 @@ from worker import AsyncCall
 PATH_ROLE = Qt.UserRole
 KIND_ROLE = Qt.UserRole + 1  # 'root' | 'dir' | 'file' | 'placeholder' | 'note'
 CHECK_STATES = {files.CHECKED: Qt.Checked, files.PARTIAL: Qt.PartiallyChecked, files.UNCHECKED: Qt.Unchecked}
-COLOR_NORMAL, COLOR_WARN, COLOR_OVER = themes.DARK.normal, themes.DARK.warn, themes.DARK.over  # цвета тёмной темы (по умолчанию)
+COLOR_NORMAL, COLOR_WARN, COLOR_OVER = themes.DARK.normal, themes.DARK.warn, themes.DARK.over  # dark theme colors (the default)
 
 
 def _dim() -> QBrush:
     return QBrush(QColor(themes.current().dim))
-WARN_SHARE = 0.8  # доля лимита контекста, после которой строка становится жёлтой
-REVEAL_MAX = 30   # сколько отмеченных путей раскрывать в дереве при загрузке чата
+WARN_SHARE = 0.8  # share of the context limit after which the line turns yellow
+REVEAL_MAX = 30   # how many checked paths to expand in the tree when a chat loads
 
 
 def _fmt(n: int) -> str:
@@ -28,7 +28,7 @@ def _fmt(n: int) -> str:
 
 
 class FilesPanel(QWidget):
-    """Корни-папки, дерево файлов с галочками и оценка размера контекста."""
+    """Root folders, a file tree with checkboxes and the context size estimate."""
 
     selection_changed = Signal()
 
@@ -42,18 +42,18 @@ class FilesPanel(QWidget):
         self._extra_tokens = 0
         self._limit_info: tuple | None = None
         self._note = ""
-        self._scale = 1.0              # поправка нашей оценки по замерам сервера
-        self._actual: int | None = None  # сколько токенов в последнем запросе насчитал сервер
+        self._scale = 1.0              # correction of our estimate from the server's measurements
+        self._actual: int | None = None  # how many tokens the server counted in the last request
 
-        self.add_btn = QPushButton("+ Папка")
-        self.remove_btn = QPushButton("− Папка")
-        self.refresh_btn = QPushButton("Обновить")
+        self.add_btn = QPushButton("+ Folder")
+        self.remove_btn = QPushButton("− Folder")
+        self.refresh_btn = QPushButton("Refresh")
         buttons = QHBoxLayout()
         for b in (self.add_btn, self.remove_btn, self.refresh_btn):
             buttons.addWidget(b)
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabel("Файлы и папки")
+        self.tree.setHeaderLabel("Files and folders")
         self.info = QLabel("")
         self.info.setWordWrap(True)
 
@@ -64,7 +64,7 @@ class FilesPanel(QWidget):
 
         self.summary_req = AsyncCall(files.summarize, self)
         self.summary_req.TIMEOUT_MS = 30000
-        self.summary_req.TIMEOUT_TEXT = "Подсчёт занял больше {seconds:g} с"
+        self.summary_req.TIMEOUT_TEXT = "Counting took more than {seconds:g} s"
         self.summary_req.succeeded.connect(self._on_summary)
         self.summary_req.failed.connect(self._on_summary_failed)
         self._debounce = QTimer(self)
@@ -81,10 +81,10 @@ class FilesPanel(QWidget):
         themes.bus.changed.connect(lambda _theme: (self.rebuild(), self._render()))
         self.rebuild()
 
-    # --- дерево ---
+    # --- tree ---
 
     def rebuild(self):
-        """Перестроить дерево с диска, сохранив раскрытые папки."""
+        """Rebuild the tree from disk, keeping expanded folders."""
         expanded = self._expanded_paths()
         self._updating = True
         self.tree.clear()
@@ -114,13 +114,13 @@ class FilesPanel(QWidget):
         if os.path.isdir(path):
             self._service_item(item, "placeholder")
         else:
-            item.setText(0, item.text(0) + "  (папка недоступна)")
+            item.setText(0, item.text(0) + "  (folder unavailable)")
             item.setForeground(0, _dim())
         return item
 
     @staticmethod
     def _service_item(parent: QTreeWidgetItem, kind: str, text: str = "") -> QTreeWidgetItem:
-        """Служебная строка (заглушка ленивой загрузки или заметка): без галочки и без выбора."""
+        """A service row (a lazy-loading placeholder or a note): no checkbox and not selectable."""
         item = QTreeWidgetItem(parent, [text])
         item.setData(0, KIND_ROLE, kind)
         item.setFlags(Qt.ItemIsEnabled)
@@ -132,7 +132,7 @@ class FilesPanel(QWidget):
     def _setup(item: QTreeWidgetItem, path: str, kind: str, checkable: bool):
         item.setData(0, PATH_ROLE, path)
         item.setData(0, KIND_ROLE, kind)
-        flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable  # явно: флаги по умолчанию разрешают галочку
+        flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable  # explicitly: the default flags allow a checkbox
         if checkable:
             flags |= Qt.ItemIsUserCheckable
             item.setCheckState(0, Qt.Unchecked)
@@ -146,7 +146,7 @@ class FilesPanel(QWidget):
             with os.scandir(path) as it:
                 entries = sorted(it, key=lambda e: (not e.is_dir(follow_symlinks=False), e.name.lower()))
         except OSError as e:
-            self._service_item(item, "note", f"(нет доступа: {e.strerror or e})")
+            self._service_item(item, "note", f"(no access: {e.strerror or e})")
             self._updating = False
             return
         for e in entries:
@@ -164,9 +164,9 @@ class FilesPanel(QWidget):
                 child.setText(0, f"{e.name}  ({reason})")
                 child.setForeground(0, _dim())
             elif docs.is_document_name(e.name):
-                child.setText(0, f"{e.name}  (документ: в запрос идёт извлечённый текст)")
+                child.setText(0, f"{e.name}  (document: the extracted text goes into the request)")
             elif files.looks_binary_by_name(e.name):
-                child.setText(0, f"{e.name}  ({'картинка' if files.is_image_name(e.name) else 'бинарный'}: в запрос идёт путь)")
+                child.setText(0, f"{e.name}  ({'image' if files.is_image_name(e.name) else 'binary'}: the path goes into the request)")
         self._updating = False
         self._sync_item(item)
 
@@ -175,16 +175,16 @@ class FilesPanel(QWidget):
         try:
             size = entry.stat().st_size
         except OSError:
-            return "нет доступа"
+            return "no access"
         limit = docs.MAX_DOC_BYTES if docs.is_document_name(entry.name) else files.MAX_FILE_BYTES
-        return f"слишком большой, {size // 1024} КБ" if size > limit else ""
+        return f"too large, {size // 1024} KB" if size > limit else ""
 
     def _on_expanded(self, item: QTreeWidgetItem):
         if item.childCount() == 1 and item.child(0).data(0, KIND_ROLE) == "placeholder":
             self._populate(item)
 
     def _reveal(self, path: str, expand_last: bool = False):
-        """Раскрыть в дереве путь до path (для отмеченных узлов выбранного чата)."""
+        """Expand the tree down to path (for checked nodes of the selected chat)."""
         root = max((r for r in self.roots if path == r or path.startswith(r + os.sep)), key=len, default=None)
         if root is None:
             return
@@ -204,10 +204,10 @@ class FilesPanel(QWidget):
                 self._on_expanded(item)
                 item.setExpanded(True)
 
-    # --- выбор ---
+    # --- selection ---
 
     def set_selection(self, sel: Selection):
-        """Показать выбор чата (без сигнала selection_changed)."""
+        """Show the chat's selection (without the selection_changed signal)."""
         self.selection = sel.copy()
         self.selection.prune(self.roots)
         for path in sorted(self.selection.include)[:REVEAL_MAX]:
@@ -240,13 +240,13 @@ class FilesPanel(QWidget):
         finally:
             self._updating = False
 
-    # --- корни ---
+    # --- roots ---
 
     def _update_buttons(self):
         self.remove_btn.setEnabled(self.tree.currentItem() is not None)
 
     def _add_root(self):
-        path = QFileDialog.getExistingDirectory(self, "Папка с файлами для контекста")
+        path = QFileDialog.getExistingDirectory(self, "Folder with files for the context")
         if path:
             self.add_root(os.path.abspath(path))
 
@@ -255,10 +255,10 @@ class FilesPanel(QWidget):
         for r in self.roots:
             rk = os.path.normcase(r)
             if key == rk or key.startswith(rk + os.sep):
-                self._set_note(f"Папка уже входит в «{os.path.basename(r) or r}»")
+                self._set_note(f"The folder is already inside \"{os.path.basename(r) or r}\"")
                 return False
             if rk.startswith(key + os.sep):
-                self._set_note(f"Внутри уже добавлена «{os.path.basename(r) or r}»: сначала убери её")
+                self._set_note(f"\"{os.path.basename(r) or r}\" is already added inside it: remove it first")
                 return False
         db.add_root(path)
         self.roots = db.list_roots()
@@ -277,7 +277,7 @@ class FilesPanel(QWidget):
         self.roots = db.list_roots()
         had = bool(self.selection.include)
         self.selection.prune(self.roots)
-        self._set_note(f"Папка «{os.path.basename(path) or path}» убрана из списка (файлы на диске не тронуты)")
+        self._set_note(f"The folder \"{os.path.basename(path) or path}\" was removed from the list (files on disk are untouched)")
         self.rebuild()
         if had:
             self.selection_changed.emit()
@@ -286,30 +286,30 @@ class FilesPanel(QWidget):
         self._note = text
         self._render()
 
-    # --- оценка размера ---
+    # --- size estimate ---
 
     def set_extra_tokens(self, tokens: int):
-        """Токены, которые занимает всё остальное в запросе (system, память, история)."""
+        """Tokens taken by everything else in the request (system, memory, history)."""
         self._extra_tokens = tokens
         self._render()
 
     def set_scale(self, scale: float):
-        """Поправка оценки токенов, накопленная по настоящим замерам сервера для выбранной модели."""
+        """Token estimate correction accumulated from real server measurements for the selected model."""
         self._scale = scale
         self._render()
 
     def set_actual(self, prompt_tokens: int | None):
-        """Сколько токенов в последнем запросе этого чата насчитал сервер (None, если ещё не было)."""
+        """How many tokens the server counted in this chat's last request (None if there was none yet)."""
         self._actual = prompt_tokens
         self._render()
 
     def set_limit(self, info: tuple | None):
-        """info = (рабочий лимит | None, модель загружена, максимум контекста | None)."""
+        """info = (working limit | None, model loaded, maximum context | None)."""
         self._limit_info = info
         self._render()
 
     def load_bundle(self) -> files.ContextBundle:
-        """Прочитать выбранные файлы для отправки (в главном потоке: размер ограничен лимитами)."""
+        """Read the selected files for sending (in the main thread: the size is bounded by the limits)."""
         return files.load_context(self.selection, self.roots)
 
     def wait_threads(self):
@@ -346,34 +346,34 @@ class FilesPanel(QWidget):
         if self._note:
             lines.append(self._note)
         if self.selection.is_empty():
-            lines.append("Файлы не выбраны")
+            lines.append("No files selected")
         elif self._summary is not None:
             s = self._summary
             files_tokens = int(s["tokens"] * scale)
             tokens += files_tokens
-            line = f"Файлов: {s['files']} · ≈{_fmt(files_tokens)} ток."
+            line = f"Files: {s['files']} · ≈{_fmt(files_tokens)} tok."
             if s["skipped"]:
-                line += f" · пропущено: {s['skipped']}"
+                line += f" · skipped: {s['skipped']}"
             if s["truncated"]:
-                line += " · выбрано слишком много, отправка будет отклонена"
+                line += " · too much selected, sending will be refused"
             lines.append(line)
         elif self._summary_error:
-            lines.append(f"Не удалось посчитать: {self._summary_error}")
+            lines.append(f"Could not count: {self._summary_error}")
         else:
-            lines.append("Считаю…")
+            lines.append("Counting…")
         limit = self._limit_info
-        total = f"Запрос целиком ≈{_fmt(tokens)} ток."
+        total = f"Whole request ≈{_fmt(tokens)} tok."
         th = themes.current()
         color = th.normal
         if limit and limit[0]:
-            total += f" из {_fmt(limit[0])}"
+            total += f" of {_fmt(limit[0])}"
             color = th.over if tokens > limit[0] else th.warn if tokens > limit[0] * WARN_SHARE else color
         elif limit and not limit[1] and limit[2]:
-            total += f" (лимит неизвестен: модель не загружена, максимум {_fmt(limit[2])})"
+            total += f" (limit unknown: the model is not loaded, maximum {_fmt(limit[2])})"
         lines.append(total)
         if self._actual:
-            lines.append(f"Последний запрос по счёту сервера: {_fmt(self._actual)} ток.")
+            lines.append(f"Last request as counted by the server: {_fmt(self._actual)} tok.")
         if abs(scale - 1.0) > 0.05:
-            lines.append(f"Оценка скорректирована по замерам сервера (×{scale:.2f}).")
+            lines.append(f"Estimate corrected from the server's measurements (×{scale:.2f}).")
         self.info.setText("\n".join(lines))
         self.info.setStyleSheet(f"color: {color};")

@@ -13,19 +13,19 @@ class ChatList(QWidget):
     new_requested = Signal()
     chat_deleted = Signal(int)
     chat_renamed = Signal(int, str)
-    theme_requested = Signal(str)  # ключ темы, выбранной пользователем
+    theme_requested = Signal(str)  # key of the theme the user chose
 
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
-        title = QLabel("Чаты")
+        title = QLabel("Chats")
         title.setObjectName("title")
         self.theme_box = QComboBox()
-        self.theme_box.setToolTip("Оформление окна")
+        self.theme_box.setToolTip("Window theme")
         for theme in themes.THEMES.values():
             self.theme_box.addItem(theme.title, theme.key)
         self.theme_box.setCurrentIndex(self.theme_box.findData(themes.current().key))
-        self.new_btn = QPushButton("+ Новый чат")
+        self.new_btn = QPushButton("+ New chat")
         self.list = QListWidget()
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         layout.addWidget(title)
@@ -41,7 +41,7 @@ class ChatList(QWidget):
         self.list.customContextMenuRequested.connect(self._menu)
 
     def _sync_theme_box(self, theme):
-        """Тему могли сменить не из селектора: показываем актуальную."""
+        """The theme may have been changed outside the selector: show the current one."""
         self.theme_box.blockSignals(True)
         self.theme_box.setCurrentIndex(self.theme_box.findData(theme.key))
         self.theme_box.blockSignals(False)
@@ -51,7 +51,7 @@ class ChatList(QWidget):
         return item.data(Qt.UserRole) if item else None
 
     def reload(self, select_id: int | None = None):
-        """Перечитать список из БД. Выбирает select_id, иначе сохраняет текущий выбор."""
+        """Re-read the list from the DB. Selects select_id, otherwise keeps the current selection."""
         keep = select_id if select_id is not None else self.current_id()
         self.list.blockSignals(True)
         self.list.clear()
@@ -74,8 +74,8 @@ class ChatList(QWidget):
         if item is None:
             return
         menu = QMenu(self)
-        rename = menu.addAction("Переименовать")
-        delete = menu.addAction("Удалить")
+        rename = menu.addAction("Rename")
+        delete = menu.addAction("Delete")
         chosen = menu.exec(self.list.viewport().mapToGlobal(pos))
         if chosen is rename:
             self._rename(item)
@@ -84,7 +84,7 @@ class ChatList(QWidget):
 
     def _rename(self, item):
         chat_id = item.data(Qt.UserRole)
-        title, ok = QInputDialog.getText(self, "Переименовать чат", "Название:", text=item.text())
+        title, ok = QInputDialog.getText(self, "Rename chat", "Name:", text=item.text())
         title = title.strip()
         if ok and title:
             db.rename_chat(chat_id, title)
@@ -93,17 +93,17 @@ class ChatList(QWidget):
 
     def _delete(self, item):
         chat_id = item.data(Qt.UserRole)
-        answer = QMessageBox.question(self, "Удалить чат", f"Удалить чат «{item.text()}» вместе с историей?")
+        answer = QMessageBox.question(self, "Delete chat", f"Delete the chat \"{item.text()}\" with its history?")
         if answer != QMessageBox.Yes:
             return
         was_current = chat_id == self.current_id()
         db.delete_chat(chat_id)
         self.chat_deleted.emit(chat_id)
         if was_current:
-            self.reload(select_id=-1)  # ничего не выбрано
+            self.reload(select_id=-1)  # nothing selected
             first = self.list.item(0)
             if first is not None:
-                self.list.setCurrentItem(first)  # эмитит chat_selected
+                self.list.setCurrentItem(first)  # emits chat_selected
             else:
                 self.chat_selected.emit(None)
         else:

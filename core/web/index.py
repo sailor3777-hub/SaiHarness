@@ -1,4 +1,4 @@
-"""Локальный поисковый индекс (SQLite FTS5, ранжирование BM25) и краулер по списку сайтов пользователя."""
+"""Local search index (SQLite FTS5, BM25 ranking) and a crawler over the user's list of sites."""
 import re
 import sqlite3
 import xml.etree.ElementTree as ET
@@ -61,13 +61,13 @@ def normalize_source(url: str) -> str:
         url = "https://" + url
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
-        raise ValueError(f"Некорректный адрес сайта: {url}")
+        raise ValueError(f"Invalid site address: {url}")
     return parts._replace(fragment="", path=parts.path or "/").geturl()
 
 
 def scope_prefix(start_url: str) -> str:
-    """Путь стартового адреса, внутри которого идёт обход: для /3/tutorial это /3/tutorial, для файла /a/b.html это /a,
-    для корня сайта пустая строка (обходится весь сайт)."""
+    """The path of the start address within which the crawl stays: for /3/tutorial it is /3/tutorial, for the file /a/b.html it is /a,
+    for the site root an empty string (the whole site is crawled)."""
     path = urlsplit(start_url).path
     if path.endswith("/"):
         path = path[:-1]
@@ -77,7 +77,7 @@ def scope_prefix(start_url: str) -> str:
 
 
 def canonical(url: str) -> str:
-    """Адрес без якоря и без хвоста index.html: /a/index.html и /a/ — одна страница, в индексе она должна быть одна."""
+    """An address without the anchor and without a trailing index.html: /a/index.html and /a/ are one page and must be one in the index."""
     url = url.split("#")[0]
     return re.sub(r"/index\.html?$", "/", url, flags=re.IGNORECASE) if "?" not in url else url
 
@@ -99,7 +99,7 @@ class WebIndex:
         self.conn.row_factory = sqlite3.Row
         ensure_schema(conn)
 
-    # --- источники ---
+    # --- sources ---
 
     def add_source(self, url: str, depth: int = 2, max_pages: int = 200) -> int:
         url = normalize_source(url)
@@ -126,7 +126,7 @@ class WebIndex:
         key = _site_key(url)
         return any(_site_key(s["url"]) == key for s in self.sources())
 
-    # --- поиск ---
+    # --- search ---
 
     def search(self, query: str, limit: int = 5) -> list[dict]:
         terms = query_terms(query)
@@ -142,7 +142,7 @@ class WebIndex:
                 return [{**r, "snippet": " ".join(r["snippet"].split())} for r in map(dict, rows)]
         return []
 
-    # --- обход ---
+    # --- crawling ---
 
     @staticmethod
     def _sitemap_urls(fetcher: WebFetcher, start: str) -> list[str]:
@@ -155,10 +155,10 @@ class WebIndex:
         return [e.text.strip() for e in root.iter() if e.text and e.tag.rsplit("}", 1)[-1] == "loc"][:SITEMAP_LIMIT]
 
     def crawl(self, source_id: int, fetcher: WebFetcher, progress=None, should_stop=lambda: False) -> dict:
-        """Обходит сайт в ширину в пределах его домена. Страницы, которых больше нет на сайте, удаляются из индекса."""
+        """Crawls a site breadth-first within its domain. Pages no longer on the site are removed from the index."""
         src = self.source(source_id)
         if src is None:
-            raise ValueError("Источник не найден")
+            raise ValueError("Source not found")
         start = src["url"]
         key = _site_key(start)
         prefix = scope_prefix(start)
@@ -185,7 +185,7 @@ class WebIndex:
                 continue
             final = canonical(page.final_url)
             visited.add(final)
-            # страница остаётся у источника, который сохранил её первым: пересекающиеся источники не отбирают её друг у друга
+            # a page stays with the source that saved it first: overlapping sources do not take it from each other
             self.conn.execute(
                 "INSERT INTO web_pages(source_id, url, title, text, fetched_at) VALUES(?,?,?,?,?) "
                 "ON CONFLICT(url) DO UPDATE SET title=excluded.title, text=excluded.text, fetched_at=excluded.fetched_at",
@@ -196,12 +196,12 @@ class WebIndex:
                 progress(saved, url)
             if depth < src["depth"]:
                 queue.extend((link, depth + 1) for link in page.links)
-        if not stopped and saved:  # полный обход: что не встретилось, с сайта пропало
+        if not stopped and saved:  # a full crawl: whatever was not met has disappeared from the site
             for row in self.conn.execute("SELECT id, url FROM web_pages WHERE source_id=?", (source_id,)).fetchall():
                 if row["url"] not in visited and not queue:
                     self.conn.execute("DELETE FROM web_pages WHERE id=?", (row["id"],))
         total = self.conn.execute("SELECT COUNT(*) FROM web_pages WHERE source_id=?", (source_id,)).fetchone()[0]
-        status = "остановлено" if stopped else (f"ошибок: {len(errors)}" if errors else "готово")
+        status = "stopped" if stopped else (f"errors: {len(errors)}" if errors else "done")
         self.conn.execute("UPDATE web_sources SET pages=?, crawled_at=?, status=? WHERE id=?",
                           (total, datetime.now().isoformat(timespec="seconds"), status, source_id))
         self.conn.commit()

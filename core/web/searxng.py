@@ -1,5 +1,5 @@
-"""Клиент собственного SearXNG (метапоиск по интернету). Адрес задаёт пользователь, обычно это машина в локальной сети,
-поэтому защита от частных адресов (core/web/safety.py) здесь не применяется: она нужна для страниц, которые читает модель."""
+"""Client for the user's own SearXNG (internet metasearch). The user sets the address, usually a machine on the local network,
+so the private-address protection (core/web/safety.py) does not apply here: it is for pages the model reads."""
 from urllib.parse import urlsplit
 
 import httpx
@@ -10,7 +10,7 @@ SNIPPET_MAX = 300
 
 
 class SearxError(Exception):
-    """Поиск не удался; текст ошибки показывается пользователю и модели."""
+    """The search failed; the error text is shown to the user and the model."""
 
 
 def normalize_url(url: str) -> str:
@@ -21,18 +21,18 @@ def normalize_url(url: str) -> str:
         url = "http://" + url
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
-        raise ValueError(f"Некорректный адрес SearXNG: {url}")
+        raise ValueError(f"Invalid SearXNG address: {url}")
     return url
 
 
 def search(base_url: str, query: str, limit: int = 5, language: str = "", category: str = "general",
            transport=None, timeout: float = TIMEOUT) -> list[dict]:
-    """Список {title, url, snippet}. Бросает SearxError с понятной причиной."""
+    """A list of {title, url, snippet}. Raises SearxError with a clear reason."""
     base_url = normalize_url(base_url)
     if not base_url:
-        raise SearxError("Адрес SearXNG не задан: укажи его во вкладке «Веб».")
+        raise SearxError("The SearXNG address is not set: enter it on the Web tab.")
     if category not in CATEGORIES:
-        raise SearxError(f"Неизвестная категория «{category}». Доступны: {', '.join(CATEGORIES)}.")
+        raise SearxError(f"Unknown category \"{category}\". Available: {', '.join(CATEGORIES)}.")
     params = {"q": query, "format": "json", "safesearch": "0"}
     if category != "general":
         params["categories"] = category
@@ -42,18 +42,18 @@ def search(base_url: str, query: str, limit: int = 5, language: str = "", catego
         with httpx.Client(transport=transport, timeout=timeout, trust_env=False) as client:
             r = client.get(base_url + "/search", params=params, headers={"User-Agent": "SaiHarness/1.0", "Accept": "application/json"})
     except httpx.TimeoutException:
-        raise SearxError(f"SearXNG не ответил за {timeout:g} с ({base_url})") from None
+        raise SearxError(f"SearXNG did not answer within {timeout:g} s ({base_url})") from None
     except httpx.HTTPError as e:
-        raise SearxError(f"SearXNG недоступен ({base_url}): {e.__class__.__name__}") from None
+        raise SearxError(f"SearXNG is unavailable ({base_url}): {e.__class__.__name__}") from None
     if r.status_code == 403:
-        raise SearxError("SearXNG вернул 403: в его settings.yml нужно включить json в search.formats "
-                         "(formats: [html, json]) и перезапустить сервис.")
+        raise SearxError("SearXNG returned 403: enable json in search.formats in its settings.yml "
+                         "(formats: [html, json]) and restart the service.")
     if r.status_code >= 400:
-        raise SearxError(f"SearXNG ответил {r.status_code}")
+        raise SearxError(f"SearXNG answered {r.status_code}")
     try:
         data = r.json()
     except ValueError:
-        raise SearxError("SearXNG вернул не JSON: проверь адрес и что в search.formats включён json.") from None
+        raise SearxError("SearXNG did not return JSON: check the address and that json is enabled in search.formats.") from None
     out = []
     for item in data.get("results") or []:
         url = item.get("url")

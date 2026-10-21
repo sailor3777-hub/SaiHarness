@@ -1,4 +1,4 @@
-"""Осторожный прогон на тяжёлой модели (контекст 70к): небольшие запросы, замеры usage против оценки."""
+"""A careful run on a heavy model (70k context): small requests, usage measurements against the estimate."""
 import json, sys, time, pathlib, tempfile
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -6,6 +6,7 @@ from core import db
 tmp = pathlib.Path(tempfile.mkdtemp()); db.DB_PATH = tmp / "t44.db"
 from core.context_builder import estimate_request_tokens
 from ui.main_window import MainWindow
+ROOT = str(pathlib.Path(__file__).resolve().parents[1])  # this checkout, not a hardcoded copy
 
 MODEL = sys.argv[1]; MAXTOK = int(sys.argv[2])
 app = QApplication([])
@@ -19,8 +20,8 @@ r1 = tmp / "SDK" / "ClaudeAPI" / "cli_project_COMPLETE"; r1.mkdir(parents=True)
 (r1 / "main.py").write_text("print('hello')\n", encoding="utf-8")
 r2 = tmp / "Wlad"; (r2 / "KeyboardEscape").mkdir(parents=True)
 req = r2 / "KeyboardEscape" / "requirements.txt"; req.write_bytes(b"pygame-ce>=2.5\r\n\r\nyellow sausage\r\n")
-(r2 / "notes.txt").write_text("первая строка\nвторая строка\nтретья строка\n", encoding="utf-8")
-src = pathlib.Path("C:/SaiHarness/core")
+(r2 / "notes.txt").write_text("first line\nsecond line\nthird line\n", encoding="utf-8")
+src = pathlib.Path(ROOT) / "core"
 db.add_root(str(r1)); db.add_root(str(r2)); db.add_root(str(src))
 asked = []
 QMessageBox.question = staticmethod(lambda p, t, text, *a, **k: (asked.append(text), QMessageBox.Yes)[1])
@@ -32,14 +33,14 @@ b = ctx.builder; wait(lambda: not b.models_req.busy)
 b.name.setText("p"); b.base_model.setCurrentText(MODEL); b.max_tokens.setValue(MAXTOK); b.temperature.setValue(0.7); b.max_steps.setValue(16); b.save_btn.click()
 tp.tree.topLevelItem(0).setCheckState(0, Qt.Checked)
 wait(lambda: not w.limit_req.busy, 20)
-print(f"\n##### {MODEL}; max_tokens {MAXTOK}; лимит контекста по данным сервера: {w._limit_info}; каталог ≈{tp.prompt_tokens()} ток.")
+print(f"\n##### {MODEL}; max_tokens {MAXTOK}; context limit reported by the server: {w._limit_info}; catalog ≈{tp.prompt_tokens()} tok.")
 
 usage_log = []
 orig_usage = w._on_usage
 def logging_usage(sid, prompt, completion, raw):
     usage_log.append((prompt, completion, raw)); orig_usage(sid, prompt, completion, raw)
 w._on_usage = logging_usage
-# thread.usage уже подключён к исходному bound-методу при создании потока: подменяем через обёртку ниже
+# thread.usage is already connected to the original bound method when the thread is created: it is replaced through the wrapper below
 orig_submit = w.on_submit
 import worker
 orig_init = worker.ChatStreamer.__init__
@@ -54,24 +55,24 @@ def ask(question):
     rows = db.list_messages(w.chat_id)[n0:]
     calls = [x for r in rows if r["role"] == "assistant" and r["tool_calls"] for x in json.loads(r["tool_calls"])]
     names = [(json.loads(x["function"]["arguments"] or "{}").get("tool") or x["function"]["name"]) for x in calls]
-    errors = [r for r in rows if r["role"] == "tool" and r["content"].startswith("ОШИБКА")]
+    errors = [r for r in rows if r["role"] == "tool" and r["content"].startswith("ERROR")]
     final = next((r for r in reversed(rows) if r["role"] == "assistant" and not r["tool_calls"]), None)
     sysrows = [r["content"] for r in rows if r["role"] == "system"]
-    print(f"\n=== {question[:110]!r}\n    {time.time()-t0:.0f} с, завершилось: {done}; вызовов: {len(calls)} ({', '.join(names)}); ошибок инструментов: {len(errors)}")
+    print(f"\n=== {question[:110]!r}\n    {time.time()-t0:.0f} s, finished: {done}; calls: {len(calls)} ({', '.join(names)}); tool errors: {len(errors)}")
     if usage_log:
-        print("    токены запросов (сервер / наша сырая оценка): " + "; ".join(f"{p}/{e}" for p, _, e in usage_log) + f"; поправка ×{w._scale.get(w._limit_key, 1.0):.2f}")
-    for r in errors: print("    ошибка:", r["content"][:140].replace("\n", " "))
-    for s in sysrows: print("    система:", s)
-    print("    ответ:", (final["content"] if final else "(нет)")[:380].replace("\n", " "))
+        print("    request tokens (server / our raw estimate): " + "; ".join(f"{p}/{e}" for p, _, e in usage_log) + f"; correction ×{w._scale.get(w._limit_key, 1.0):.2f}")
+    for r in errors: print("    error:", r["content"][:140].replace("\n", " "))
+    for s in sysrows: print("    system:", s)
+    print("    answer:", (final["content"] if final else "(none)")[:380].replace("\n", " "))
 
-ask("что находится в папке?")
-ask("выведи содержимое файла readme.md")
-ask("найди в моих файлах такой стринг: yellow sausage. скажи где ты нашёл это.")
-ask("отлично! замени yellow sausage на brown bear")
-print("    requirements.txt:", req.read_bytes(), "| подтверждений:", len(asked), "| .bak:", sorted(x.name for x in req.parent.iterdir() if '.bak' in x.name))
-ask("Прочитай файл notes.txt и файл requirements.txt, посчитай через калькулятор общее число строк в них (считай пустые строки тоже) и назови число.")
+ask("what is in the folder?")
+ask("show the contents of the file readme.md")
+ask("find this string in my files: yellow sausage. tell me where you found it.")
+ask("great! replace yellow sausage with brown bear")
+print("    requirements.txt:", req.read_bytes(), "| confirmations:", len(asked), "| .bak:", sorted(x.name for x in req.parent.iterdir() if '.bak' in x.name))
+ask("Read the file notes.txt and the file requirements.txt, count the total number of lines in them with the calculator (count empty lines too) and give the number.")
 
-# настоящий контекст из файлов: четыре исходника проекта, около 6 тыс. токенов
+# a real context from files: four project source files, about 6 thousand tokens
 w.new_chat(); ctx.findChild(__import__("PySide6.QtWidgets", fromlist=["QTabWidget"]).QTabWidget).setCurrentWidget(fp)
 for i in range(fp.tree.topLevelItemCount()):
     top = fp.tree.topLevelItem(i)
@@ -81,9 +82,9 @@ for i in range(fp.tree.topLevelItemCount()):
             if top.child(j).text(0) in ("connection.py", "context_builder.py", "richtext.py", "diag.py"):
                 top.child(j).setCheckState(0, Qt.Checked)
 wait(lambda: fp._summary is not None, 30)
-print(f"\n--- панель файлов до запроса:\n{fp.info.text()}")
+print(f"\n--- the files panel before the request:\n{fp.info.text()}")
 tp.enabled.clear(); tp._sync(); w._on_tools_changed()
-ask("Назови одним списком имена всех Python-файлов, содержимое которых ты видишь в контексте. Только имена, без пояснений.")
-print(f"\n--- панель файлов после запроса:\n{fp.info.text()}")
-print(f"\nитоговая поправка оценки для модели: ×{w._scale.get(w._limit_key, 1.0):.3f}; по чатам последний usage: {w._last_usage}")
+ask("List the names of all the Python files whose content you see in the context. Names only, no explanations.")
+print(f"\n--- the files panel after the request:\n{fp.info.text()}")
+print(f"\nthe final estimate correction for the model: ×{w._scale.get(w._limit_key, 1.0):.3f}; last usage per chat: {w._last_usage}")
 w.close()

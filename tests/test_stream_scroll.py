@@ -11,7 +11,7 @@ def check(name, cond, extra=""):
     print(("OK   " if cond else "FAIL ") + name + (f"  [{extra}]" if extra and not cond else ""))
 
 import os
-if os.environ.get("OLD_BEHAVIOUR"):  # имитация прежней логики: полная перерисовка на каждый кусок текста
+if os.environ.get("OLD_BEHAVIOUR"):  # imitates the old logic: a full redraw for every chunk of text
     ChatView._render_live = lambda self: self._render()
 app = QApplication([])
 def spin(n=3):
@@ -19,120 +19,120 @@ def spin(n=3):
 
 def row(role, content, reasoning=""):
     return {"role": role, "content": content, "reasoning": reasoning, "tool_calls": "", "tool_call_id": "", "tool_name": ""}
-HISTORY = [row("user", f"вопрос номер {i}") if i % 2 == 0 else
-           row("assistant", f"**ответ** {i}\n\n- пункт один\n- пункт два\n\nещё текст для высоты {i}", f"мысль {i}\nвторая строка мысли") for i in range(60)]
-STREAM_R = "Думаю над задачей.\n\n1. сначала разберу условие\n2. затем проверю варианты\n3. после этого отвечу\n" * 12
-STREAM_C = "## Итог\n\nВот **подробный** ответ с `кодом`:\n\n```python\nfor i in range(3):\n    print(i)\n```\n\n- первый\n- второй\n" * 6
+HISTORY = [row("user", f"question number {i}") if i % 2 == 0 else
+           row("assistant", f"**answer** {i}\n\n- item one\n- item two\n\nmore text for height {i}", f"thought {i}\nsecond line of the thought") for i in range(60)]
+STREAM_R = "Thinking about the task.\n\n1. first I will parse the problem\n2. then I will check the options\n3. after that I will answer\n" * 12
+STREAM_C = "## Summary\n\nHere is a **detailed** answer with `code`:\n\n```python\nfor i in range(3):\n    print(i)\n```\n\n- first\n- second\n" * 6
 
 def new_view(history=HISTORY):
     v = ChatView(); v.resize(900, 600); v.show(); v.set_messages(history); spin(); return v
 def chunks(text, n=9): return [text[i:i + n] for i in range(0, len(text), n)]
 def reference_text(v):
-    """Как выглядел бы документ при полной перерисовке тех же блоков."""
+    """What the document would look like after a full redraw of the same blocks."""
     r = ChatView(); r.resize(900, 600); r.show()
     r.show_reasoning.setChecked(v.show_reasoning.isChecked())
     r._blocks = [dict(b) for b in v._blocks]; r._render(); spin()
     return r.history.toPlainText().rstrip()
 
-# ---------- A. эквивалентность полной перерисовке ----------
+# ---------- A. equivalence to a full redraw ----------
 v = new_view(); v.begin_live(); spin()
-check("живой блок создан, позиция известна", v._live_pos is not None and v._blocks[-1]["live"])
+check("the live block is created, its position is known", v._live_pos is not None and v._blocks[-1]["live"])
 fed = 0; mismatches = []
 for kind, text in [("reasoning", STREAM_R), ("content", STREAM_C)]:
     for i, ch in enumerate(chunks(text)):
         v.append_delta(kind, ch); v._flush(); fed += 1
         if fed % 40 == 0 and v.history.toPlainText().rstrip() != reference_text(v): mismatches.append(fed)
-check("во время стрима текст всегда совпадает с полной перерисовкой", not mismatches, mismatches[:3])
+check("while streaming the text always matches a full redraw", not mismatches, mismatches[:3])
 v.end_live(keep=True); spin()
-check("после завершения совпадает с полной перерисовкой", v.history.toPlainText().rstrip() == reference_text(v))
-check("после завершения блок не живой, позиция сброшена", not v._blocks[-1]["live"] and v._live_pos is None)
+check("after finishing it matches a full redraw", v.history.toPlainText().rstrip() == reference_text(v))
+check("after finishing the block is not live, the position is reset", not v._blocks[-1]["live"] and v._live_pos is None)
 
-# ---------- B. полных перерисовок во время стрима нет ----------
+# ---------- B. no full redraws while streaming ----------
 v = new_view(); v.begin_live(); spin()
 calls = []; real_set = v.history.setHtml; v.history.setHtml = lambda h: (calls.append(1), real_set(h))[1]
 for ch in chunks(STREAM_R + STREAM_C): v.append_delta("reasoning", ch); v._flush()
-check(f"setHtml не вызывается во время стрима (кусков: {len(chunks(STREAM_R + STREAM_C))})", calls == [], len(calls))
+check(f"setHtml is not called while streaming (chunks: {len(chunks(STREAM_R + STREAM_C))})", calls == [], len(calls))
 v.end_live(True)
-check("и при завершении блока", calls == [], len(calls))
+check("nor when the block is finished", calls == [], len(calls))
 v.history.setHtml = real_set
 
-# ---------- C. прокрутка вверх не возвращается ----------
+# ---------- C. scrolling up does not jump back ----------
 v = new_view(); bar = v.history.verticalScrollBar(); v.begin_live(); spin()
-check("есть что прокручивать", bar.maximum() > 1000, bar.maximum())
+check("there is something to scroll", bar.maximum() > 1000, bar.maximum())
 bar.setValue(bar.maximum() // 2); spin(); anchor = bar.value(); moved = []
 for ch in chunks(STREAM_R + STREAM_C):
     v.append_delta("content", ch); v._flush()
     if bar.value() != anchor: moved.append((bar.value(), anchor))
-check("прокрутка посреди истории не сдвигается ни на пиксель за весь стрим", not moved, moved[:3])
-check("при этом документ вырос", bar.maximum() > 1000)
+check("scrolling in the middle of the history does not move by a pixel during the whole stream", not moved, moved[:3])
+check("and the document did grow", bar.maximum() > 1000)
 
-# ---------- D. у нижнего края — следит за текстом ----------
+# ---------- D. at the bottom edge it follows the text ----------
 v = new_view(); bar = v.history.verticalScrollBar(); v.begin_live(); spin(); bar.setValue(bar.maximum()); lag = []
 for ch in chunks(STREAM_R):
     v.append_delta("reasoning", ch); v._flush()
     if bar.value() < bar.maximum() - 4: lag.append((bar.value(), bar.maximum()))
-check("у нижнего края просмотр идёт за текстом", not lag, lag[:3])
+check("at the bottom edge the view follows the text", not lag, lag[:3])
 
-# ---------- E. колесо мыши посреди генерации ----------
+# ---------- E. the mouse wheel in the middle of generation ----------
 def wheel(view, dy):
     vp = view.history.viewport()
     app.sendEvent(vp, QWheelEvent(QPointF(100, 100), QPointF(100, 100), QPoint(0, 0), QPoint(0, dy), Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False))
 v = new_view(); bar = v.history.verticalScrollBar(); v.begin_live(); spin(); bar.setValue(bar.maximum())
 for ch in chunks(STREAM_R)[:30]: v.append_delta("reasoning", ch); v._flush()
 before = bar.value(); wheel(v, 360); spin(); after_wheel = bar.value()
-check("колесо вверх работает во время стрима", after_wheel < before - 20, (before, after_wheel))
+check("the wheel up works while streaming", after_wheel < before - 20, (before, after_wheel))
 held = []
 for ch in chunks(STREAM_R)[30:150]:
     v.append_delta("reasoning", ch); v._flush()
     if bar.value() != after_wheel: held.append((bar.value(), after_wheel))
-check("после прокрутки колесом позиция удерживается, нет «возврата» вниз", not held, held[:3])
+check("after scrolling with the wheel the position holds, no \"jump\" back down", not held, held[:3])
 wheel(v, 360); spin(); second = bar.value()
-check("повторные прокрутки колесом продолжают работать", second < after_wheel, (after_wheel, second))
+check("repeated wheel scrolls keep working", second < after_wheel, (after_wheel, second))
 for _ in range(60): wheel(v, -360)
-spin(); check("прокрутка вниз до конца снова включает слежение", bar.value() >= bar.maximum() - 4, (bar.value(), bar.maximum()))
+spin(); check("scrolling down to the end turns following on again", bar.value() >= bar.maximum() - 4, (bar.value(), bar.maximum()))
 for ch in chunks(STREAM_R)[150:200]: v.append_delta("reasoning", ch); v._flush()
-check("и дальше просмотр идёт за текстом", bar.value() >= bar.maximum() - 4)
+check("and then the view follows the text", bar.value() >= bar.maximum() - 4)
 
-# ---------- F. пустой ответ убирается без следа ----------
+# ---------- F. an empty reply is removed without a trace ----------
 v = new_view(); before_txt = v.history.toPlainText().rstrip(); nb = len(v._blocks)
-v.begin_live(); spin(); check("заглушка «…» пока нет текста", v.history.toPlainText().rstrip().endswith("…"))
-v.append_delta("reasoning", "чуть"); v._flush()
+v.begin_live(); spin(); check("a \"…\" placeholder while there is no text", v.history.toPlainText().rstrip().endswith("…"))
+v.append_delta("reasoning", "a bit"); v._flush()
 v.end_live(keep=False); spin()
-check("end_live(keep=False) возвращает документ к исходному", v.history.toPlainText().rstrip() == before_txt and len(v._blocks) == nb and v._live_pos is None)
+check("end_live(keep=False) returns the document to the original", v.history.toPlainText().rstrip() == before_txt and len(v._blocks) == nb and v._live_pos is None)
 v.begin_live(); v.append_delta("content", "x"); v._flush(); spin()
-check("после удаления можно начать новый живой блок", v.history.toPlainText().rstrip() == reference_text(v))
+check("after removal a new live block can be started", v.history.toPlainText().rstrip() == reference_text(v))
 
-# ---------- G. переключатель размышлений посреди стрима ----------
+# ---------- G. the reasoning toggle in the middle of a stream ----------
 v = new_view(); v.begin_live(); spin()
 for ch in chunks(STREAM_R)[:20]: v.append_delta("reasoning", ch); v._flush()
 v.show_reasoning.setChecked(False); spin()
-check("выключение размышлений посреди стрима: текст верный", v.history.toPlainText().rstrip() == reference_text(v) and "Думаю над задачей" not in v.history.toPlainText().split("Модель")[-1])
+check("turning reasoning off mid-stream: the text is right", v.history.toPlainText().rstrip() == reference_text(v) and "Thinking about the task" not in v.history.toPlainText().split("Model")[-1])
 for ch in chunks(STREAM_C)[:20]: v.append_delta("content", ch); v._flush()
-check("стрим продолжается после переключения", "Итог" in v.history.toPlainText() and v.history.toPlainText().rstrip() == reference_text(v))
+check("the stream goes on after the toggle", "Summary" in v.history.toPlainText() and v.history.toPlainText().rstrip() == reference_text(v))
 v.show_reasoning.setChecked(True); spin()
-check("включение обратно: размышления вернулись", "Думаю над задачей" in v.history.toPlainText() and v.history.toPlainText().rstrip() == reference_text(v))
-v.append_delta("content", "ещё"); v._flush(); check("после включения живой блок обновляется", v.history.toPlainText().rstrip().endswith("ещё") or "ещё" in v.history.toPlainText()[-40:])
+check("turning it back on: the reasoning is back", "Thinking about the task" in v.history.toPlainText() and v.history.toPlainText().rstrip() == reference_text(v))
+v.append_delta("content", chr(10) * 2 + "more")  # a new paragraph: the cut-off chunk may end inside a code fence line; v._flush(); check("after turning it on the live block updates", v.history.toPlainText().rstrip().endswith("more") or "more" in v.history.toPlainText()[-40:])
 
-# ---------- H. работа через таймер (как в приложении) ----------
+# ---------- H. working through the timer (as in the app) ----------
 v = new_view(); v.begin_live(); spin()
 for ch in chunks(STREAM_C): v.append_delta("content", ch)
 t0 = time.time()
 while v._dirty and time.time() - t0 < 3: app.processEvents(); time.sleep(0.005)
 spin(); v.end_live(True)
-check("таймер сам досчитывает отрисовку", v.history.toPlainText().rstrip() == reference_text(v))
+check("the timer finishes the drawing by itself", v.history.toPlainText().rstrip() == reference_text(v))
 
-# ---------- I. раунд инструментов: перезагрузка и новый живой блок ----------
-v = new_view(); v.begin_live(); v.append_delta("content", "промежуточный"); v._flush()
-v.set_messages(HISTORY + [row("user", "q"), row("assistant", "", "мысль")]); v.begin_live(); spin()
-check("set_messages во время стрима + новый живой блок", v._live_pos is not None and v.history.toPlainText().rstrip() == reference_text(v))
-v.append_delta("content", "финал"); v._flush(); v.end_live(True)
-check("раунд завершён корректно", v.history.toPlainText().rstrip().endswith("финал"))
+# ---------- I. a tool round: reload and a new live block ----------
+v = new_view(); v.begin_live(); v.append_delta("content", "intermediate"); v._flush()
+v.set_messages(HISTORY + [row("user", "q"), row("assistant", "", "thought")]); v.begin_live(); spin()
+check("set_messages while streaming + a new live block", v._live_pos is not None and v.history.toPlainText().rstrip() == reference_text(v))
+v.append_delta("content", "final"); v._flush(); v.end_live(True)
+check("the round finished correctly", v.history.toPlainText().rstrip().endswith("final"))
 
-# ---------- J. скорость ----------
+# ---------- J. speed ----------
 v = new_view(HISTORY * 3); v.begin_live(); spin(); stream = chunks(STREAM_R + STREAM_C)
 t0 = time.perf_counter()
 for ch in stream: v.append_delta("content", ch); v._flush()
 per = (time.perf_counter() - t0) * 1000 / len(stream)
-print(f"      документ {len(HISTORY) * 3} блоков, живой блок до {len(STREAM_R + STREAM_C)} симв.: {per:.2f} мс на обновление")
-check("обновление живого блока быстрее 15 мс", per < 15, per)
+print(f"      document of {len(HISTORY) * 3} blocks, live block up to {len(STREAM_R + STREAM_C)} chars: {per:.2f} ms per update")
+check("updating the live block takes less than 15 ms", per < 15, per)
 print("ALL OK" if ok_all else "SOME FAILED")

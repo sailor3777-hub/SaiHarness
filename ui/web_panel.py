@@ -17,7 +17,7 @@ DEFAULT_MAX_PAGES = 200
 
 
 def _probe_searxng(url: str) -> int:
-    """Пробный запрос: сколько результатов вернул SearXNG (ошибка — SearxError)."""
+    """A test request: how many results SearXNG returned (an error raises SearxError)."""
     return len(searxng.search(url, "test", 1, timeout=6.0))
 
 
@@ -26,7 +26,7 @@ def _fmt_time(value: str) -> str:
 
 
 class WebPanel(QWidget):
-    """Сайты для локального поискового индекса (инструмент web_search). Страницы обходятся и сохраняются в базе."""
+    """Sites for the local search index (the web_search tool). Pages are crawled and saved in the database."""
 
     changed = Signal()
 
@@ -37,8 +37,8 @@ class WebPanel(QWidget):
         self._queue: list[int] = []
 
         self.searx_url = QLineEdit()
-        self.searx_url.setPlaceholderText("Адрес вашего SearXNG, например http://192.168.0.50:8080")
-        self.searx_check = QPushButton("Проверить")
+        self.searx_url.setPlaceholderText("Your SearXNG address, for example http://192.168.0.50:8080")
+        self.searx_check = QPushButton("Check")
         self.searx_status = QLabel("")
         self.searx_status.setWordWrap(True)
         self.searx_probe = AsyncCall(_probe_searxng, self)
@@ -47,22 +47,22 @@ class WebPanel(QWidget):
         self.searx_probe.busy_changed.connect(lambda busy: self.searx_check.setEnabled(not busy))
 
         self.url = QLineEdit()
-        self.url.setPlaceholderText("Адрес сайта, например docs.python.org")
+        self.url.setPlaceholderText("Site address, for example docs.python.org")
         self.depth = QSpinBox()
         self.depth.setRange(0, 5)
         self.depth.setValue(DEFAULT_DEPTH)
-        self.depth.setToolTip("Сколько переходов по ссылкам от стартовой страницы (0 — только она сама).")
+        self.depth.setToolTip("How many link hops from the start page (0 means only the page itself).")
         self.max_pages = QSpinBox()
         self.max_pages.setRange(1, 5000)
         self.max_pages.setValue(DEFAULT_MAX_PAGES)
-        self.max_pages.setToolTip("Предел страниц одного сайта в индексе.")
-        self.add_btn = QPushButton("Добавить и обойти")
-        self.refresh_btn = QPushButton("Обновить")
-        self.stop_btn = QPushButton("Остановить")
-        self.remove_btn = QPushButton("Удалить")
+        self.max_pages.setToolTip("Maximum number of pages of one site in the index.")
+        self.add_btn = QPushButton("Add and crawl")
+        self.refresh_btn = QPushButton("Refresh")
+        self.stop_btn = QPushButton("Stop")
+        self.remove_btn = QPushButton("Delete")
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Сайт", "Страниц", "Обход", "Состояние"])
+        self.tree.setHeaderLabels(["Site", "Pages", "Crawled", "Status"])
         self.tree.setRootIsDecorated(False)
         self.tree.setSelectionMode(QTreeWidget.ExtendedSelection)
         self.tree.setColumnWidth(0, 200)
@@ -70,9 +70,9 @@ class WebPanel(QWidget):
         self.info.setWordWrap(True)
 
         opts = QHBoxLayout()
-        opts.addWidget(QLabel("Глубина"))
+        opts.addWidget(QLabel("Depth"))
         opts.addWidget(self.depth)
-        opts.addWidget(QLabel("Страниц"))
+        opts.addWidget(QLabel("Pages"))
         opts.addWidget(self.max_pages)
         opts.addStretch(1)
         row = QHBoxLayout()
@@ -84,10 +84,10 @@ class WebPanel(QWidget):
         searx_row.addWidget(self.searx_check)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("SearXNG: поиск по интернету (инструмент web_search_internet)"))
+        layout.addWidget(QLabel("SearXNG: internet search (the web_search_internet tool)"))
         layout.addLayout(searx_row)
         layout.addWidget(self.searx_status)
-        layout.addWidget(QLabel("Сайты для поиска (индекс хранится локально; web_search ищет только в нём)"))
+        layout.addWidget(QLabel("Sites to search (the index is stored locally; web_search searches only in it)"))
         layout.addWidget(self.url)
         layout.addLayout(opts)
         layout.addWidget(self.add_btn)
@@ -106,7 +106,7 @@ class WebPanel(QWidget):
         self.tree.itemSelectionChanged.connect(self._update_buttons)
         self.reload()
 
-    # --- данные ---
+    # --- data ---
 
     def _index(self) -> WebIndex:
         return WebIndex(sqlite3.connect(db.DB_PATH, timeout=30))
@@ -115,15 +115,15 @@ class WebPanel(QWidget):
         keep = {self.tree.topLevelItem(i).data(0, Qt.UserRole) for i in range(self.tree.topLevelItemCount())
                 if self.tree.topLevelItem(i).isSelected()}
         self.tree.clear()
-        db.connect().close()  # гарантирует, что файл базы существует
+        db.connect().close()  # makes sure the database file exists
         index = self._index()
         try:
             for s in index.sources():
-                state = "идёт обход…" if s["id"] == self._crawling_id else (
-                    "в очереди" if s["id"] in self._queue else (s["status"] or "не обходился"))
+                state = "crawling…" if s["id"] == self._crawling_id else (
+                    "queued" if s["id"] in self._queue else (s["status"] or "not crawled"))
                 item = QTreeWidgetItem([s["url"], str(s["pages"]), _fmt_time(s["crawled_at"]), state])
                 item.setData(0, Qt.UserRole, s["id"])
-                item.setToolTip(0, f"Глубина {s['depth']}, до {s['max_pages']} страниц")
+                item.setToolTip(0, f"Depth {s['depth']}, up to {s['max_pages']} pages")
                 self.tree.addTopLevelItem(item)
                 item.setSelected(s["id"] in keep)
         finally:
@@ -168,19 +168,19 @@ class WebPanel(QWidget):
         if not self._save_searx():
             return
         if not self.searx_url.text():
-            self.searx_status.setText("Адрес не задан.")
+            self.searx_status.setText("The address is not set.")
             return
-        self.searx_status.setText("Проверяю…")
+        self.searx_status.setText("Checking…")
         self.searx_probe.start(self.searx_url.text())
 
     def _on_searx_ok(self, count: int):
-        self.searx_status.setText(f"Работает: тестовый запрос вернул результатов — {count}." if count else
-                                  "Отвечает, но результатов на тестовый запрос нет (проверь включённые поисковые системы).")
+        self.searx_status.setText(f"Working: the test query returned {count} results." if count else
+                                  "Responding, but the test query returned no results (check the enabled search engines).")
 
     def _on_searx_failed(self, message: str):
         self.searx_status.setText(message)
 
-    # --- действия ---
+    # --- actions ---
 
     def add_site(self):
         text = self.url.text().strip()
@@ -205,7 +205,7 @@ class WebPanel(QWidget):
         ids = self._selected_ids()
         if not ids or self._crawling_id is not None:
             return
-        if QMessageBox.question(self, "Удалить сайты из индекса?", f"Сайтов: {len(ids)}. Собранные страницы будут удалены.",
+        if QMessageBox.question(self, "Delete sites from the index?", f"Sites: {len(ids)}. The collected pages will be deleted.",
                                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
             return
         index = self._index()
@@ -222,9 +222,9 @@ class WebPanel(QWidget):
         self._queue.clear()
         if self._thread is not None:
             self._thread.stop()
-            self.info.setText("Останавливаю…")
+            self.info.setText("Stopping…")
 
-    # --- обход ---
+    # --- crawling ---
 
     def _enqueue(self, ids: list[int]):
         for i in ids:
@@ -241,7 +241,7 @@ class WebPanel(QWidget):
             return
         self._crawling_id = self._queue.pop(0)
         t = CrawlThread(self._crawling_id, str(db.DB_PATH), self)
-        t.progress.connect(lambda n, url: self.info.setText(f"Сохранено страниц: {n}\n{url}"))
+        t.progress.connect(lambda n, url: self.info.setText(f"Pages saved: {n}\n{url}"))
         t.finished_ok.connect(self._on_done)
         t.failed.connect(self._on_failed)
         t.finished.connect(self._on_thread_finished)
@@ -251,11 +251,11 @@ class WebPanel(QWidget):
 
     def _on_done(self, result: dict):
         errors = result["errors"]
-        text = f"Готово: в индексе страниц сайта — {result['pages']}."
+        text = f"Done: the index has {result['pages']} pages of the site."
         if result["stopped"]:
-            text = "Обход остановлен."
+            text = "Crawl stopped."
         if errors:
-            text += f" Не загрузилось: {len(errors)} (первая: {errors[0][:160]})"
+            text += f" Failed to load: {len(errors)} (first: {errors[0][:160]})"
         self.info.setText(text)
         self.changed.emit()
 

@@ -6,24 +6,24 @@ from typing import Iterator
 import httpx
 
 
-LENGTH_NOTICE = "Лимит max tokens исчерпан, ответ оборван"
+LENGTH_NOTICE = "Max tokens limit reached, the reply was cut off"
 
 
 class LLMError(Exception):
-    """Ошибка общения с сервером модели; текст можно показывать пользователю."""
+    """An error talking to the model server; the text can be shown to the user."""
 
 
 def answer_in_reasoning(content: str, reasoning: str, notice: str = "") -> bool:
-    """Ответ модели лежит в размышлениях: content пуст, а размышления завершены.
+    """The model's answer is in the reasoning: content is empty and the reasoning is complete.
 
-    Так делает, например, Qwen 3.5 в LM Studio: ответ приходит как reasoning_content, а content остаётся пустым.
-    Если ответ оборван лимитом токенов, это недописанные размышления, ответом они не считаются.
+    Qwen 3.5 in LM Studio, for example, does this: the answer arrives as reasoning_content while content stays empty.
+    If the reply was cut off by the token limit, it is unfinished reasoning and does not count as an answer.
     """
     return not content.strip() and bool(reasoning.strip()) and LENGTH_NOTICE not in notice
 
 
 def _error_text(response: httpx.Response) -> str:
-    """Достаёт сообщение об ошибке из тела ответа OpenAI-совместимого сервера."""
+    """Extracts the error message from the body of an OpenAI-compatible server's reply."""
     code = response.status_code
     try:
         err = response.json().get("error")
@@ -31,16 +31,16 @@ def _error_text(response: httpx.Response) -> str:
     except (ValueError, AttributeError):
         message = None
     if code in (401, 403):
-        return f"Сервер отклонил ключ ({code})"
-    return f"Ошибка сервера {code}: {message}" if message else f"Ошибка сервера: {code}"
+        return f"The server rejected the key ({code})"
+    return f"Server error {code}: {message}" if message else f"Server error: {code}"
 
 
 def get_context_info(base_url: str, api_key: str, model: str) -> tuple[int | None, bool, int | None]:
-    """Размер контекста модели у LM Studio: (рабочий лимит, загружена ли модель, максимум).
+    """The model's context size in LM Studio: (working limit, whether the model is loaded, maximum).
 
-    Рабочий лимит известен только у загруженной модели (loaded_context_length): при загрузке
-    «на лету» LM Studio может выставить контекст намного меньше максимума модели.
-    Любой сбой даёт (None, False, None): оценка лимита не должна ломать работу.
+    The working limit is known only for a loaded model (loaded_context_length): when loading
+    "on the fly", LM Studio may set a context much smaller than the model's maximum.
+    Any failure gives (None, False, None): estimating the limit must not break anything.
     """
     root = base_url.rstrip("/")
     root = root[:-3] if root.endswith("/v1") else root
@@ -61,7 +61,7 @@ def get_context_info(base_url: str, api_key: str, model: str) -> tuple[int | Non
 
 
 def model_type(base_url: str, api_key: str, model: str, timeout: float = 4.0) -> str | None:
-    """Тип модели у LM Studio: 'vlm' (видит изображения), 'llm' и т. д. Любой сбой или чужой сервер дают None."""
+    """Model type in LM Studio: 'vlm' (sees images), 'llm' and so on. Any failure or a different server gives None."""
     root = base_url.rstrip("/")
     root = root[:-3] if root.endswith("/v1") else root
     try:
@@ -76,7 +76,7 @@ def model_type(base_url: str, api_key: str, model: str, timeout: float = 4.0) ->
 
 
 def _accumulate_tool_call(calls: dict[int, dict], tc: dict):
-    """Склеивает вызов инструмента из кусков потока (имя и аргументы приходят фрагментами по index)."""
+    """Assembles a tool call from stream chunks (the name and arguments arrive in fragments by index)."""
     if not isinstance(tc, dict):
         return
     idx = tc.get("index") if isinstance(tc.get("index"), int) else len(calls)
@@ -86,7 +86,7 @@ def _accumulate_tool_call(calls: dict[int, dict], tc: dict):
     fn = tc.get("function") or {}
     entry["name"] += fn.get("name") or ""
     args = fn.get("arguments")
-    if isinstance(args, dict):  # некоторые серверы отдают объект вместо строки
+    if isinstance(args, dict):  # some servers send an object instead of a string
         args = json.dumps(args, ensure_ascii=False)
     entry["arguments"] += args or ""
     if not entry["id"]:
@@ -103,17 +103,17 @@ def stream_chat(
     cancel: threading.Event | None = None,
     tools: list[dict] | None = None,
 ) -> Iterator[tuple[str, object]]:
-    """Стримит ответ модели. Отдаёт пары ('reasoning' | 'content', текст).
+    """Streams the model's reply. Yields pairs ('reasoning' | 'content', text).
 
-    Если модель решила вызвать инструменты, в конце потока отдаётся ('tool_calls', список) из словарей
-    {id, name, arguments} (arguments — JSON-строка, собранная из кусков). Если сервер сообщил, сколько токенов
-    занял запрос, отдаётся ('usage', {prompt_tokens, completion_tokens}).
+    If the model decided to call tools, the end of the stream yields ('tool_calls', list) of dicts
+    {id, name, arguments} (arguments is a JSON string assembled from chunks). If the server reported how many tokens
+    the request took, ('usage', {prompt_tokens, completion_tokens}) is yielded.
 
-    Размышления берутся из delta.reasoning_content (LM Studio, DeepSeek) или delta.reasoning.
-    Если выставить cancel, генерация прекращается при ближайшем чанке от сервера.
-    Предупреждения отдаются как ('notice', текст): сервер ответил другой моделью, чем запрошена
-    (LM Studio подставляет загруженную при неизвестном имени), или ответ оборван лимитом токенов
-    (у моделей с размышлениями лимит съедают сами размышления).
+    Reasoning comes from delta.reasoning_content (LM Studio, DeepSeek) or delta.reasoning.
+    If cancel is set, generation stops at the next chunk from the server.
+    Warnings are yielded as ('notice', text): the server answered with a different model than requested
+    (LM Studio substitutes the loaded one for an unknown name), or the reply was cut off by the token limit
+    (for reasoning models the reasoning itself uses up the limit).
     """
     body = {
         "model": model,
@@ -121,12 +121,12 @@ def stream_chat(
         "temperature": temperature,
         "max_tokens": max_tokens,
         "stream": True,
-        "stream_options": {"include_usage": True},  # сервер пришлёт настоящее число токенов запроса и ответа
+        "stream_options": {"include_usage": True},  # the server will send the real token counts of the request and reply
     }
     if tools:
         body["tools"] = tools
         body["tool_choice"] = "auto"
-    # первый токен может ждать загрузки модели или обработки длинного промпта
+    # the first token may wait for the model to load or for a long prompt to be processed
     timeout = httpx.Timeout(10.0, read=300.0)
     checked_model = False
     calls: dict[int, dict] = {}
@@ -163,7 +163,7 @@ def stream_chat(
                 if not checked_model and isinstance(actual, str):
                     checked_model = True
                     if actual != model:
-                        yield "notice", f"Ответила модель «{actual}» вместо «{model}»"
+                        yield "notice", f"Model \"{actual}\" answered instead of \"{model}\""
                 for choice in chunk.get("choices") or []:
                     if choice.get("finish_reason") == "length":
                         yield "notice", LENGTH_NOTICE
@@ -179,9 +179,9 @@ def stream_chat(
         if calls:
             yield "tool_calls", [calls[i] for i in sorted(calls)]
     except (httpx.ConnectError, httpx.TimeoutException):
-        raise LLMError(f"Нет связи с {base_url}") from None
+        raise LLMError(f"Cannot reach {base_url}") from None
     except httpx.HTTPError as e:
-        raise LLMError(f"Ошибка запроса: {e}") from None
+        raise LLMError(f"Request error: {e}") from None
 
 
 def _headers(api_key: str) -> dict:
@@ -189,7 +189,7 @@ def _headers(api_key: str) -> dict:
 
 
 def list_models(base_url: str, api_key: str = "", timeout: float = 5.0) -> list[str]:
-    """Возвращает id моделей с OpenAI-совместимого сервера (GET {base_url}/models)."""
+    """Returns the model ids from an OpenAI-compatible server (GET {base_url}/models)."""
     try:
         r = httpx.get(
             f"{base_url}/models", headers=_headers(api_key), timeout=timeout, trust_env=False
@@ -197,17 +197,17 @@ def list_models(base_url: str, api_key: str = "", timeout: float = 5.0) -> list[
         r.raise_for_status()
         data = r.json()
     except (httpx.ConnectError, httpx.TimeoutException):
-        raise LLMError(f"Нет связи с {base_url}") from None
+        raise LLMError(f"Cannot reach {base_url}") from None
     except httpx.HTTPStatusError as e:
         code = e.response.status_code
         if code in (401, 403):
-            raise LLMError(f"Сервер отклонил ключ ({code})") from None
-        raise LLMError(f"Ошибка сервера: {code}") from None
+            raise LLMError(f"The server rejected the key ({code})") from None
+        raise LLMError(f"Server error: {code}") from None
     except httpx.HTTPError as e:
-        raise LLMError(f"Ошибка запроса: {e}") from None
+        raise LLMError(f"Request error: {e}") from None
     except ValueError:
-        raise LLMError("Некорректный ответ сервера") from None
+        raise LLMError("Invalid server reply") from None
     items = data.get("data") if isinstance(data, dict) else None
     if not isinstance(items, list):
-        raise LLMError("Некорректный ответ сервера")
+        raise LLMError("Invalid server reply")
     return sorted(m["id"] for m in items if isinstance(m, dict) and isinstance(m.get("id"), str))

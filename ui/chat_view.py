@@ -10,40 +10,40 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QPlainTextEdit, QPushButton, QLabel, QCheckBox, QFileDialog,
 )
 
-from core import imagegen, images
+from core import imagegen, images, markers
 from core.richtext import render_markdown
 from core.vision import IMAGE_EXTENSIONS
 from core.tools import describe_call
 from ui import themes
 
-ROLE_LABELS = {"user": "Вы", "assistant": "Модель", "system": "Система"}
-TOOL_RESULT_PREVIEW = 600  # сколько символов результата инструмента показывать в чате
-RENDER_INTERVAL_MS = 60  # во время стрима перерисовываем не чаще этого
-STICK_QUIET_MS = 400     # сколько мс диапазон прокрутки не должен расти, чтобы отпустить нижний край
-THUMB_WIDTH = 180        # ширина миниатюры картинки в истории чата
-GENERATED_WIDTH = 320    # ширина картинки, которую нарисовал image_generate
-PREVIEW_SIZE = 56        # размер превью приложенной картинки над полем ввода
-IMAGE_FILTER = "Изображения (*.png *.jpg *.jpeg *.gif *.bmp *.webp);;Все файлы (*)"
+ROLE_LABELS = {"user": "You", "assistant": "Model", "system": "System"}
+TOOL_RESULT_PREVIEW = 600  # how many characters of a tool result to show in the chat
+RENDER_INTERVAL_MS = 60  # while streaming, redraw no more often than this
+STICK_QUIET_MS = 400     # how many ms the scroll range must stop growing before the bottom edge is released
+THUMB_WIDTH = 180        # thumbnail width of a picture in the chat history
+GENERATED_WIDTH = 320    # width of a picture drawn by image_generate
+PREVIEW_SIZE = 56        # size of an attached picture's preview above the input field
+IMAGE_FILTER = "Images (*.png *.jpg *.jpeg *.gif *.bmp *.webp);;All files (*)"
 
 
 def _image_files(mime) -> list[str]:
-    """Пути картинок из перетащенных или вставленных файлов."""
+    """Picture paths from dragged or pasted files."""
     return [u.toLocalFile() for u in mime.urls()
             if u.isLocalFile() and os.path.splitext(u.toLocalFile())[1].lower() in IMAGE_EXTENSIONS]
 
 
 class _Input(QPlainTextEdit):
-    """Enter отправляет, Shift+Enter переносит строку."""
+    """Enter sends, Shift+Enter starts a new line."""
 
     submit = Signal()
-    media = Signal(object)  # QMimeData с картинкой или файлами-картинками (вставка Ctrl+V, перетаскивание)
+    media = Signal(object)  # QMimeData with a picture or picture files (Ctrl+V paste, drag and drop)
 
     def canInsertFromMimeData(self, source):
         return source.hasImage() or bool(_image_files(source)) or super().canInsertFromMimeData(source)
 
     def insertFromMimeData(self, source):
         if source.hasImage() or _image_files(source):
-            self.media.emit(source)  # обработчик отрабатывает сразу: QMimeData живёт только во время вставки
+            self.media.emit(source)  # the handler runs immediately: QMimeData lives only during the paste
             return
         super().insertFromMimeData(source)
 
@@ -66,21 +66,21 @@ class ChatView(QWidget):
     def __init__(self):
         super().__init__()
         self._blocks: list[dict] = []  # {role, content, reasoning, live, images}
-        self.pending: list[str] = []   # пути приложенных, но ещё не отправленных картинок
+        self.pending: list[str] = []   # paths of attached pictures not sent yet
         self._dirty = False
-        self._live_pos: int | None = None  # позиция в документе, с которой начинается живой блок
+        self._live_pos: int | None = None  # document position where the live block starts
         self._first_format_cache: dict[str, QTextBlockFormat] = {}
-        # Qt достраивает раскладку длинного документа по частям, и диапазон прокрутки растёт уже после загрузки.
-        # Пока он растёт, держим нижний край; пользователь прервёт это колесом, мышью или клавишей.
+        # Qt lays out a long document in parts, and the scroll range keeps growing after loading.
+        # While it grows, the bottom edge is held; the user interrupts this with the wheel, mouse or a key.
         self._stick_bottom = False
 
         layout = QVBoxLayout(self)
-        self.title = QLabel("Диалог")
+        self.title = QLabel("Dialog")
         self.title.setObjectName("title")
-        self.show_reasoning = QCheckBox("Размышления")
+        self.show_reasoning = QCheckBox("Reasoning")
         self.show_reasoning.setChecked(True)
-        self.request_btn = QPushButton("Запрос")
-        self.request_btn.setToolTip("Показать, что ушло модели в последнем запросе (system prompt, история)")
+        self.request_btn = QPushButton("Request")
+        self.request_btn.setToolTip("Show what was sent to the model in the last request (system prompt, history)")
         header = QHBoxLayout()
         header.addWidget(self.title, 1)
         header.addWidget(self.show_reasoning)
@@ -90,19 +90,19 @@ class ChatView(QWidget):
         self.history.setReadOnly(True)
         self.history.document().setDefaultStyleSheet(themes.current().richtext_css())
         self.input = _Input()
-        self.input.setPlaceholderText("Сообщение... (Enter — отправить, Shift+Enter — новая строка)")
+        self.input.setPlaceholderText("Message... (Enter to send, Shift+Enter for a new line)")
         self.input.setFixedHeight(90)
         self.status = QLabel("")
         self.status.setObjectName("status")
         self.attach_btn = QPushButton("📎")
-        self.attach_btn.setToolTip("Приложить изображение (можно вставить Ctrl+V или перетащить в поле ввода)")
+        self.attach_btn.setToolTip("Attach an image (you can also paste with Ctrl+V or drag it into the input field)")
         self.attach_btn.setFixedWidth(40)
-        self.preview = QWidget()  # полоса превью приложенных картинок
+        self.preview = QWidget()  # strip of attached picture previews
         self.preview_row = QHBoxLayout(self.preview)
         self.preview_row.setContentsMargins(0, 0, 0, 0)
         self.preview.hide()
-        self.send_btn = QPushButton("Отправить")
-        self.stop_btn = QPushButton("Стоп")
+        self.send_btn = QPushButton("Send")
+        self.stop_btn = QPushButton("Stop")
         self.stop_btn.setEnabled(False)
         row = QHBoxLayout()
         row.addWidget(self.attach_btn)
@@ -137,30 +137,30 @@ class ChatView(QWidget):
         self.request_btn.clicked.connect(self.request_view_requested)
         self.show_reasoning.toggled.connect(lambda _on: self._render())
 
-    # --- прокрутка ---
+    # --- scrolling ---
 
     def _on_range_changed(self, _low: int, high: int):
         if self._stick_bottom:
             self.history.verticalScrollBar().setValue(high)
-            self._stick_timer.start()  # прилипание заканчивается, когда диапазон перестал расти
+            self._stick_timer.start()  # sticking ends once the range has stopped growing
 
     def eventFilter(self, obj, event):
         if self._stick_bottom and event.type() in (QEvent.Wheel, QEvent.MouseButtonPress, QEvent.KeyPress):
-            self._stick_bottom = False  # пользователь взял прокрутку на себя
+            self._stick_bottom = False  # the user took over scrolling
         return super().eventFilter(obj, event)
 
-    # --- ввод ---
+    # --- input ---
 
     def _submit(self):
-        """Отправка. Текст из поля убирает владелец (после проверки), чтобы не терять ввод."""
+        """Send. The owner clears the field (after its checks) so that input is not lost."""
         text = self.input.toPlainText().strip()
         if (text or self.pending) and self.send_btn.isEnabled():
             self.message_submitted.emit(text)
 
-    # --- приложенные картинки ---
+    # --- attached pictures ---
 
     def _choose_files(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, "Приложить изображение", "", IMAGE_FILTER)
+        paths, _ = QFileDialog.getOpenFileNames(self, "Attach an image", "", IMAGE_FILTER)
         self.attach_files(paths)
 
     def attach_from_mime(self, mime):
@@ -175,20 +175,20 @@ class ChatView(QWidget):
         for path in paths:
             image = QImage(path)
             if image.isNull():
-                self.set_status(f"Не удалось открыть изображение: {os.path.basename(path)}")
+                self.set_status(f"Could not open the image: {os.path.basename(path)}")
                 continue
             self.attach_image(image, jpeg=os.path.splitext(path)[1].lower() in (".jpg", ".jpeg"))
 
     def attach_image(self, image: QImage, jpeg: bool = False):
-        """Сохраняет картинку в data/images (крупную уменьшает) и добавляет её к приложенным."""
+        """Saves the picture to data/images (shrinking a large one) and adds it to the attachments."""
         if len(self.pending) >= images.MAX_IMAGES_PER_MESSAGE:
-            self.set_status(f"К одному сообщению можно приложить до {images.MAX_IMAGES_PER_MESSAGE} изображений")
+            self.set_status(f"You can attach up to {images.MAX_IMAGES_PER_MESSAGE} images to one message")
             return
         if max(image.width(), image.height()) > images.MAX_SIDE:
             image = image.scaled(images.MAX_SIDE, images.MAX_SIDE, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         path = images.new_image_path(".jpg" if jpeg else ".png")
         if not image.save(str(path), "JPG" if jpeg else "PNG", 90 if jpeg else -1):
-            self.set_status("Не удалось сохранить изображение в data/images")
+            self.set_status("Could not save the image to data/images")
             return
         self.pending.append(str(path))
         self._rebuild_preview()
@@ -213,7 +213,7 @@ class ChatView(QWidget):
             thumb.setToolTip(os.path.basename(path))
             remove = QPushButton("×")
             remove.setFixedSize(22, 22)
-            remove.setToolTip("Убрать изображение")
+            remove.setToolTip("Remove the image")
             remove.clicked.connect(lambda _=False, p=path: self.remove_pending(p))
             self.preview_row.addWidget(thumb)
             self.preview_row.addWidget(remove)
@@ -230,7 +230,7 @@ class ChatView(QWidget):
     def set_title(self, text: str):
         self.title.setText(text)
 
-    # --- история ---
+    # --- history ---
 
     def set_messages(self, messages):
         self._blocks = [self._block_from_row(m) for m in messages]
@@ -256,7 +256,7 @@ class ChatView(QWidget):
         self._render(scroll_to_end=True)
 
     def begin_live(self, reasoning: str = "", content: str = ""):
-        """Начинает блок ответа модели, который будет дополняться по мере стрима."""
+        """Starts the model's reply block, which grows as the stream comes in."""
         self._blocks.append({"role": "assistant", "content": content, "reasoning": reasoning, "live": True,
                              "tool_calls": [], "tool_name": ""})
         self._render(scroll_to_end=True)
@@ -271,7 +271,7 @@ class ChatView(QWidget):
             self._timer.start()
 
     def end_live(self, keep: bool = True):
-        """Завершает живой блок. keep=False убирает его (если ответ пустой)."""
+        """Finishes the live block. keep=False removes it (if the reply is empty)."""
         self._timer.stop()
         self._dirty = False
         live = self._live_block()
@@ -279,7 +279,7 @@ class ChatView(QWidget):
             self._render()
             return
         if keep:
-            self._render_live()  # показать последние накопленные куски
+            self._render_live()  # show the last accumulated chunks
             live["live"] = False
         else:
             cursor = QTextCursor(self.history.document())
@@ -290,7 +290,7 @@ class ChatView(QWidget):
         self._live_pos = None
 
     def _on_theme(self, theme):
-        """Смена темы: стили документа и цвета подписей в уже показанной истории."""
+        """Theme change: document styles and label colors in the history already shown."""
         self.history.document().setDefaultStyleSheet(theme.richtext_css())
         self._first_format_cache.clear()
         self._render()
@@ -309,7 +309,7 @@ class ChatView(QWidget):
         out = [f'<p style="margin-bottom:0"><b style="color:{color}">{escape(label)}</b></p>']
         if b["reasoning"] and self.show_reasoning.isChecked():
             out.append(
-                f'<div style="color:{th.reasoning}"><i>Размышления:</i>{self._md(b, "reasoning")}</div>'
+                f'<div style="color:{th.reasoning}"><i>Reasoning:</i>{self._md(b, "reasoning")}</div>'
             )
         if b["content"]:
             out.append(self._md(b, "content") if b["role"] == "assistant" else f"<p>{_text_html(b['content'])}</p>")
@@ -326,31 +326,31 @@ class ChatView(QWidget):
 
     @staticmethod
     def _images_html(paths: list[str], width: int = THUMB_WIDTH) -> str:
-        """Миниатюры приложенных картинок (файл мог исчезнуть с диска: тогда подпись вместо картинки)."""
+        """Thumbnails of attached pictures (the file may have disappeared from disk: then a caption instead of the picture)."""
         parts = []
         for path in paths:
             if os.path.exists(path):
                 parts.append(f'<img src="{Path(path).as_uri()}" width="{width}">')
             else:
-                parts.append(f'<i style="color:{themes.current().reasoning}">[изображение {escape(os.path.basename(path))} не найдено]</i>')
+                parts.append(f'<i style="color:{themes.current().reasoning}">[image {escape(os.path.basename(path))} not found]</i>')
         return "<p>" + "&nbsp;".join(parts) + "</p>"
 
     @staticmethod
     def _tool_result_html(b: dict) -> str:
-        """Результат инструмента: кратко и приглушённо (полный текст виден в окне «Запрос»)."""
+        """A tool result: short and muted (the full text is visible in the Request window)."""
         text = b["content"]
-        shown = text if len(text) <= TOOL_RESULT_PREVIEW else text[:TOOL_RESULT_PREVIEW].rstrip() + f"… (ещё {len(text) - TOOL_RESULT_PREVIEW} симв.)"
-        failed = text.startswith("ОШИБКА")
+        shown = text if len(text) <= TOOL_RESULT_PREVIEW else text[:TOOL_RESULT_PREVIEW].rstrip() + f"… ({len(text) - TOOL_RESULT_PREVIEW} more chars)"
+        failed = markers.is_error(text)
         th = themes.current()
         color = th.tool_error if failed else th.reasoning
-        picture = imagegen.result_path(text)  # результат image_generate: под текстом показываем саму картинку
+        picture = imagegen.result_path(text)  # an image_generate result: show the picture itself under the text
         extra = ChatView._images_html([picture], GENERATED_WIDTH) if picture else ""
-        return (f'<p style="color:{color}"><b>◂ {escape(b["tool_name"] or "результат")}</b><br>'
+        return (f'<p style="color:{color}"><b>◂ {escape(b["tool_name"] or "result")}</b><br>'
                 f'{_text_html(shown)}</p>{extra}')
 
     @staticmethod
     def _md(b: dict, field: str) -> str:
-        """Markdown -> HTML. Для завершённых сообщений результат кешируется в блоке."""
+        """Markdown -> HTML. For finished messages the result is cached in the block."""
         text = b[field]
         if b["live"]:
             return render_markdown(text)
@@ -364,13 +364,13 @@ class ChatView(QWidget):
         return self._blocks[-1] if self._blocks and self._blocks[-1]["live"] else None
 
     def _render(self, scroll_to_end: bool = False):
-        """Полная перерисовка. Нужна при структурных изменениях; во время стрима обновляется только живой блок."""
+        """A full redraw. Needed for structural changes; while streaming only the live block is updated."""
         bar = self.history.verticalScrollBar()
         at_bottom = scroll_to_end or bar.value() >= bar.maximum() - 4
         old = bar.value()
         live = self._live_block()
         static = self._blocks[:-1] if live else self._blocks
-        # хвостовой перевод строки в разметке Qt превращает в лишний пробел в конце последнего абзаца
+        # Qt turns a trailing line break in the markup into an extra space at the end of the last paragraph
         self.history.setHtml("".join(self._block_html(b) for b in static).rstrip())
         self._live_pos = None
         if live is not None:
@@ -384,25 +384,25 @@ class ChatView(QWidget):
             self._stick_timer.start()
 
     def _set_live_html(self, html: str):
-        """Заменяет разметку живого блока на месте, остальной документ не трогает."""
+        """Replaces the live block's markup in place, leaving the rest of the document alone."""
         doc = self.history.document()
         cursor = QTextCursor(doc)
         cursor.setPosition(self._live_pos)
         cursor.movePosition(QTextCursor.End, QTextCursor.KeepAnchor)
         cursor.removeSelectedText()
         if self._live_pos > 0:
-            cursor.insertBlock()  # иначе первый абзац склеится с последним абзацем предыдущего блока
+            cursor.insertBlock()  # otherwise the first paragraph merges with the last paragraph of the previous block
         start = cursor.position()
         html = html.rstrip()
         cursor.insertHtml(html)
-        # Qt оставляет первому вставленному абзацу формат блока-предшественника (теряются отступы, например
-        # margin-bottom:0 у подписи «Модель»), поэтому применяем формат, который задан в самой разметке
+        # Qt gives the first inserted paragraph the format of the preceding block (margins are lost, for example
+        # margin-bottom:0 of the "Model" label), so the format given in the markup itself is applied
         fmt_cursor = QTextCursor(doc)
         fmt_cursor.setPosition(start)
         fmt_cursor.setBlockFormat(self._first_block_format(html))
 
     def _first_block_format(self, html: str) -> QTextBlockFormat:
-        """Формат блока первого абзаца разметки (кешируется по открывающему тегу: он у блоков всегда один и тот же)."""
+        """Block format of the markup's first paragraph (cached by the opening tag: it is always the same for blocks)."""
         tag = html[: html.index(">") + 1] if html.startswith("<") else ""
         fmt = self._first_format_cache.get(tag)
         if fmt is None:
@@ -410,22 +410,22 @@ class ChatView(QWidget):
             tmp.setDefaultStyleSheet(themes.current().richtext_css())
             tmp.setHtml(f"{tag}x</p>" if tag.startswith("<p") else html)
             fmt = tmp.begin().blockFormat()
-            fmt.setObjectIndex(-1)  # ссылка на список из временного документа в этом документе недействительна
+            fmt.setObjectIndex(-1)  # a list reference from the temporary document is invalid in this document
             self._first_format_cache[tag] = fmt
         return fmt
 
     def _render_live(self):
-        """Обновление при стриме: меняется только живой блок, положение прокрутки сохраняется.
+        """Update while streaming: only the live block changes, the scroll position is kept.
 
-        Раньше на каждый кусок текста заново собирался весь документ (setHtml): он сбрасывает прокрутку
-        и перекладывает всё, отсюда дёргание и «съеденное» колесо мыши.
+        Previously the whole document was rebuilt for every chunk of text (setHtml): it resets scrolling
+        and relays out everything, hence the jitter and the "swallowed" mouse wheel.
         """
         live = self._live_block()
         if live is None or self._live_pos is None:
             self._render()
             return
         bar = self.history.verticalScrollBar()
-        at_bottom = bar.value() >= bar.maximum() - 4  # пользователь у нижнего края: следим за текстом
+        at_bottom = bar.value() >= bar.maximum() - 4  # the user is at the bottom edge: follow the text
         old = bar.value()
         self._set_live_html(self._block_html(live))
         bar.setValue(bar.maximum() if at_bottom else old)

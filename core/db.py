@@ -58,8 +58,9 @@ CREATE TABLE IF NOT EXISTS app_settings (
 CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, id);
 """
 
-DEFAULT_CHAT_TITLE = "Новый чат"
-DEFAULT_MAX_STEPS = 16  # сколько раундов вызова инструментов модель может сделать за один ответ
+DEFAULT_CHAT_TITLE = "New chat"
+LEGACY_CHAT_TITLES: tuple[str, ...] = ("Новый чат",)  # earlier default titles (Russian version): such chats in old databases get an automatic title too
+DEFAULT_MAX_STEPS = 16  # how many rounds of tool calls the model may make in one reply
 
 
 def connect() -> sqlite3.Connection:
@@ -68,16 +69,16 @@ def connect() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(_SCHEMA)
-    # миграции: колонки, добавленные после первых версий таблиц
+    # migrations: columns added after the first versions of the tables
     _ensure_column(conn, "model_profiles", "connection", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "model_profiles", "max_steps", f"INTEGER NOT NULL DEFAULT {DEFAULT_MAX_STEPS}")
-    _ensure_column(conn, "model_profiles", "memory_rules", "TEXT NOT NULL DEFAULT ''")  # правила работы с долгосрочной памятью (пусто: берётся core.memory.DEFAULT_RULES)
+    _ensure_column(conn, "model_profiles", "memory_rules", "TEXT NOT NULL DEFAULT ''")  # rules for long-term memory (empty: core.memory.DEFAULT_RULES is used)
     _ensure_column(conn, "chats", "profile", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "messages", "reasoning", "TEXT NOT NULL DEFAULT ''")
-    _ensure_column(conn, "messages", "tool_calls", "TEXT NOT NULL DEFAULT ''")    # JSON вызовов в ответе модели
-    _ensure_column(conn, "messages", "tool_call_id", "TEXT NOT NULL DEFAULT ''")  # для role='tool'
-    _ensure_column(conn, "messages", "tool_name", "TEXT NOT NULL DEFAULT ''")     # для role='tool'
-    _ensure_column(conn, "messages", "images", "TEXT NOT NULL DEFAULT ''")        # JSON-список путей приложенных картинок
+    _ensure_column(conn, "messages", "tool_calls", "TEXT NOT NULL DEFAULT ''")    # JSON of the calls in the model's reply
+    _ensure_column(conn, "messages", "tool_call_id", "TEXT NOT NULL DEFAULT ''")  # for role='tool'
+    _ensure_column(conn, "messages", "tool_name", "TEXT NOT NULL DEFAULT ''")     # for role='tool'
+    _ensure_column(conn, "messages", "images", "TEXT NOT NULL DEFAULT ''")        # JSON list of paths of attached images
     return conn
 
 
@@ -104,12 +105,12 @@ def set_chat_profile(chat_id: int, profile: str):
 
 
 def save_connection(name, kind, url, api_key, old_name=None):
-    """Создаёт подключение или обновляет old_name (с переименованием).
-    Бросает ValueError, если имя уже занято другим подключением."""
+    """Creates a connection or updates old_name (renaming it).
+    Raises ValueError if the name is already taken by another connection."""
     with connect() as conn:
         taken = conn.execute("SELECT 1 FROM connections WHERE name=?", (name,)).fetchone()
         if taken and name != old_name:
-            raise ValueError(f"Имя «{name}» уже занято")
+            raise ValueError(f"The name \"{name}\" is already taken")
         if old_name:
             cur = conn.execute(
                 "UPDATE connections SET name=?, kind=?, url=?, api_key=? WHERE name=?",
@@ -151,7 +152,7 @@ def remove_root(path: str):
 
 
 def load_chat_context(chat_id: int) -> tuple[set[str], set[str]]:
-    """(include, exclude) путей, выбранных для чата."""
+    """(include, exclude) of the paths selected for the chat."""
     with connect() as conn:
         rows = conn.execute("SELECT path, mode FROM chat_context WHERE chat_id=?", (chat_id,)).fetchall()
     return {r["path"] for r in rows if r["mode"] == "in"}, {r["path"] for r in rows if r["mode"] == "ex"}
@@ -164,6 +165,11 @@ def save_chat_context(chat_id: int, include, exclude):
             "INSERT INTO chat_context(chat_id, path, mode) VALUES(?,?,?)",
             [(chat_id, p, "in") for p in include] + [(chat_id, p, "ex") for p in exclude],
         )
+
+
+def is_default_title(title: str) -> bool:
+    """The chat has no name yet: it has the default title (current or from an older version)."""
+    return title == DEFAULT_CHAT_TITLE or title in LEGACY_CHAT_TITLES
 
 
 def create_chat(title: str = DEFAULT_CHAT_TITLE) -> int:
@@ -196,9 +202,9 @@ def add_message(chat_id: int, role: str, content: str, reasoning: str = "", imag
 
 
 def add_messages(chat_id: int, messages: list[dict]) -> list[int]:
-    """Добавляет сообщения одной транзакцией (вызов инструментов и его результаты сохраняются только вместе).
+    """Adds messages in one transaction (a tool call and its results are saved only together).
 
-    Ключи: role, content, и необязательные reasoning, tool_calls (JSON-строка), tool_call_id, tool_name, images (JSON-строка).
+    Keys: role, content, and the optional reasoning, tool_calls (JSON string), tool_call_id, tool_name, images (JSON string).
     """
     ids = []
     with connect() as conn:
@@ -214,7 +220,7 @@ def add_messages(chat_id: int, messages: list[dict]) -> list[int]:
 
 
 def load_chat_tools(chat_id: int) -> set[str]:
-    """id инструментов («сервер.имя»), включённых в чате."""
+    """ids of the tools ("server.name") enabled in the chat."""
     with connect() as conn:
         return {r["tool_id"] for r in conn.execute("SELECT tool_id FROM chat_tools WHERE chat_id=?", (chat_id,))}
 
@@ -237,7 +243,7 @@ def get_setting(key: str, default: str = "") -> str:
 
 
 def set_setting(key: str, value: str):
-    """Пустое значение удаляет настройку."""
+    """An empty value deletes the setting."""
     with connect() as conn:
         if value:
             conn.execute("INSERT INTO app_settings(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -247,7 +253,7 @@ def set_setting(key: str, value: str):
 
 
 def set_tool_policy(tool_id: str, mode: str | None):
-    """mode=None сбрасывает на значение по умолчанию."""
+    """mode=None resets to the default."""
     with connect() as conn:
         if mode is None:
             conn.execute("DELETE FROM tool_policy WHERE tool_id=?", (tool_id,))

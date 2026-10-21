@@ -1,4 +1,4 @@
-"""Вёрстка после стрима должна быть пиксель в пиксель такой же, как при полной перерисовке."""
+"""The layout after streaming must be pixel for pixel the same as after a full redraw."""
 import json
 from PySide6.QtWidgets import QApplication
 from ui.chat_view import ChatView
@@ -9,18 +9,18 @@ def spin(n=5):
 def row(role, content, reasoning="", tool_calls="", tool_name=""):
     return {"role": role, "content": content, "reasoning": reasoning, "tool_calls": tool_calls, "tool_call_id": "", "tool_name": tool_name}
 CALLS = json.dumps([{"id": "c", "type": "function", "function": {"name": "call_tool", "arguments": '{"tool": "tb.calc", "arguments": {"expression": "1+1"}}'}}])
-HIST = [row("user", "Что в файле?"), row("assistant", "Вот список:\n\n- один\n- два\n\nИ **итог**.", "Подумаю.\n1. раз\n2. два")]
-R = "Нужно прочитать файл.\n\n1. найду путь\n2. прочитаю\n"
-C = "## Результат\n\nВ файле написано `секрет`.\n\n```python\nprint(1)\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n- первый\n- второй"
-TOOLS = [row("assistant", "", "ищу", CALLS), row("tool", "2", "", "", "tb.calc")]
+HIST = [row("user", "What is in the file?"), row("assistant", "Here is the list:\n\n- one\n- two\n\nAnd the **summary**.", "Let me think.\n1. one\n2. two")]
+R = "I need to read the file.\n\n1. find the path\n2. read it\n"
+C = "## Result\n\nThe file says `secret`.\n\n```python\nprint(1)\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n- first\n- second"
+TOOLS = [row("assistant", "", "searching", CALLS), row("tool", "2", "", "", "tb.calc")]
 
 SCENARIOS = {
-    "после обычных сообщений": (HIST + [row("user", "ещё вопрос")], R, C),
-    "чат пуст (живой блок первый)": ([], R, C),
-    "после вызова и результата инструмента": (HIST + [row("user", "q")] + TOOLS, R, C),
-    "только размышления": (HIST + [row("user", "q")], R, ""),
-    "только ответ": (HIST + [row("user", "q")], "", C),
-    "длинная история": ((HIST + [row("user", "q")]) * 15 + [row("user", "ещё вопрос")], R, C),
+    "after ordinary messages": (HIST + [row("user", "another question")], R, C),
+    "empty chat (the live block is first)": ([], R, C),
+    "after a tool call and result": (HIST + [row("user", "q")] + TOOLS, R, C),
+    "reasoning only": (HIST + [row("user", "q")], R, ""),
+    "answer only": (HIST + [row("user", "q")], "", C),
+    "a long history": ((HIST + [row("user", "q")]) * 15 + [row("user", "another question")], R, C),
 }
 ok_all = True
 for name, (static, r, c) in SCENARIOS.items():
@@ -30,7 +30,7 @@ for name, (static, r, c) in SCENARIOS.items():
         for i in range(0, len(text), 7):
             s.append_delta(kind, text[i:i + 7]); s._flush()
     s.end_live(True); spin()
-    # сравниваем верх, середину и низ документа
+    # compare the top, middle and bottom of the document
     results = []
     for pos in ("top", "middle", "bottom"):
         for v in (ref, s):
@@ -42,5 +42,5 @@ for name, (static, r, c) in SCENARIOS.items():
     same = (ref.history.document().size().height() == s.history.document().size().height()
             and ref.history.toPlainText().rstrip() == s.history.toPlainText().rstrip() and results == [0, 0, 0])
     ok_all &= same
-    print(("OK   " if same else "FAIL ") + f"{name}: высота {s.history.document().size().height():.0f} vs {ref.history.document().size().height():.0f}; отличий (верх/середина/низ): {results}")
+    print(("OK   " if same else "FAIL ") + f"{name}: height {s.history.document().size().height():.0f} vs {ref.history.document().size().height():.0f}; differences (top/middle/bottom): {results}")
 print("ALL OK" if ok_all else "SOME FAILED")

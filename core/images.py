@@ -1,9 +1,9 @@
-"""Изображения в сообщениях чата (чистый Python, без Qt).
+"""Images in chat messages (pure Python, no Qt).
 
-Картинка хранится файлом в data/images, в сообщении записан только путь. В запросе к модели она сначала лежит
-«заглушкой» (часть image_url со ссылкой sai-image:путь): так сборка и оценка токенов не читают и не кодируют файлы
-при каждом обновлении интерфейса. Прямо перед отправкой (в потоке ответа) заглушки заменяются настоящими data-URL,
-если модель видит изображения, или описанием от vision-модели, если не видит.
+An image is stored as a file in data/images; the message holds only the path. In a request to the model it first sits
+as a "placeholder" (an image_url part with a sai-image:path link): this way building the request and estimating tokens
+do not read or encode files on every interface update. Right before sending (in the reply thread) placeholders are
+replaced with real data URLs if the model can see images, or with a description from the vision model if it cannot.
 """
 import json
 import os
@@ -11,12 +11,12 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-IMAGES_DIR = Path(os.environ.get("SAI_IMAGES_DIR") or Path(__file__).resolve().parent.parent / "data" / "images")  # переменная нужна тестам
+IMAGES_DIR = Path(os.environ.get("SAI_IMAGES_DIR") or Path(__file__).resolve().parent.parent / "data" / "images")  # the variable is for tests
 PLACEHOLDER_PREFIX = "sai-image:"
 MAX_IMAGES_PER_MESSAGE = 4
-MAX_SIDE = 1280              # длинная сторона при сохранении: картинка крупнее съедает контекст зря
-IMAGE_TOKENS = 1200          # грубая оценка одной картинки; настоящее число поправляет замер сервера
-HISTORY_IMAGE_MESSAGES = 2   # картинки скольких последних сообщений уходят модели; в остальных остаётся пометка
+MAX_SIDE = 1280              # long side when saving: a larger picture wastes context
+IMAGE_TOKENS = 1200          # rough estimate for one picture; the server's measurement corrects the real number
+HISTORY_IMAGE_MESSAGES = 2   # images of how many latest messages go to the model; the rest keep a note
 
 
 def new_image_path(ext: str = ".png") -> Path:
@@ -41,7 +41,7 @@ def placeholder_part(path: str) -> dict:
 
 
 def placeholder_path(part) -> str | None:
-    """Путь из части-заглушки (иначе None)."""
+    """Path from a placeholder part (otherwise None)."""
     if isinstance(part, dict) and part.get("type") == "image_url":
         url = (part.get("image_url") or {}).get("url")
         if isinstance(url, str) and url.startswith(PLACEHOLDER_PREFIX):
@@ -55,7 +55,7 @@ def has_placeholders(messages: list[dict]) -> bool:
 
 
 def text_of(content) -> str:
-    """Текст сообщения; у сообщения из частей — только текстовые части."""
+    """Message text; for a message made of parts, only the text parts."""
     if isinstance(content, list):
         return "\n".join(p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text")
     return content or ""
@@ -66,7 +66,7 @@ def count_images(content) -> int:
 
 
 def user_content(text: str, paths: list[str]):
-    """Содержимое сообщения пользователя: строка или список частей (текст и заглушки картинок)."""
+    """Content of a user message: a string or a list of parts (text and image placeholders)."""
     if not paths:
         return text
     parts = [{"type": "text", "text": text}] if text else []
@@ -74,17 +74,17 @@ def user_content(text: str, paths: list[str]):
 
 
 def to_data_urls(messages: list[dict]) -> list[dict]:
-    """Заглушки -> настоящие data-URL (для модели, которая видит изображения)."""
+    """Placeholders -> real data URLs (for a model that can see images)."""
     from core.vision import image_data_url
     return _map_images(messages, lambda path: {"type": "image_url", "image_url": {"url": image_data_url(Path(path))}})
 
 
 def to_descriptions(messages: list[dict], describe: Callable[[Path], str]) -> list[dict]:
-    """Заглушки -> текст описания (для модели без зрения)."""
+    """Placeholders -> description text (for a model without vision)."""
     def part(path: str) -> dict:
-        return {"type": "text", "text": f"[Изображение {Path(path).name}. Его описала vision-модель: {describe(Path(path))}]"}
+        return {"type": "text", "text": f"[Image {Path(path).name}. Described by the vision model: {describe(Path(path))}]"}
     out = _map_images(messages, part)
-    for m in out:  # из одних текстовых частей собираем обычную строку: так совместимы любые шаблоны
+    for m in out:  # a plain string is assembled from text-only parts: this works with any template
         if isinstance(m.get("content"), list) and all(p.get("type") == "text" for p in m["content"]):
             m["content"] = text_of(m["content"])
     return out

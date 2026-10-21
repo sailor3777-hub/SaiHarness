@@ -1,8 +1,8 @@
-"""Отрисовка страницы с JavaScript через Qt WebEngine в отдельном процессе (запускается core/web/render.py).
+"""Renders a JavaScript page with Qt WebEngine in a separate process (started by core/web/render.py).
 
-Вызов: python web_render.py <url> [таймаут_сек] [--allow-private]
-Результат: одна строка "SAIJSON:" + JSON {"html": ...} или {"error": ...}; остальной вывод Qt игнорируется.
-Процесс отдельный, потому что tools_server.py работает без Qt и без цикла событий, а WebEngine нужен GUI-поток.
+Usage: python web_render.py <url> [timeout_sec] [--allow-private]
+Result: one line "SAIJSON:" + JSON {"html": ...} or {"error": ...}; any other Qt output is ignored.
+A separate process because tools_server.py runs without Qt and without an event loop, while WebEngine needs a GUI thread.
 """
 import json
 import os
@@ -13,7 +13,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu --disable-logging")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-SETTLE_MS = 1200   # пауза после загрузки: скрипты успевают дорисовать страницу
+SETTLE_MS = 1200   # pause after loading: scripts get time to finish drawing the page
 
 
 def emit(payload: dict):
@@ -25,7 +25,7 @@ def main() -> int:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     allow_private = "--allow-private" in sys.argv
     if not args:
-        emit({"error": "не указан адрес"})
+        emit({"error": "no address given"})
         return 2
     url = args[0]
     timeout_ms = int(float(args[1]) * 1000) if len(args) > 1 else 30_000
@@ -42,7 +42,7 @@ def main() -> int:
     from PySide6.QtWidgets import QApplication
 
     class Guard(QWebEngineUrlRequestInterceptor):
-        """Блокирует запросы страницы (в том числе картинки, скрипты, iframe) к непубличным адресам."""
+        """Blocks the page's requests (including images, scripts, iframes) to non-public addresses."""
 
         def __init__(self):
             super().__init__()
@@ -63,7 +63,7 @@ def main() -> int:
                 info.block(True)
 
     app = QApplication(sys.argv[:1])
-    profile = QWebEngineProfile()          # без имени: профиль в памяти, куки и кэш на диск не пишутся
+    profile = QWebEngineProfile()          # unnamed: an in-memory profile, no cookies or cache written to disk
     guard = Guard()
     profile.setUrlRequestInterceptor(guard)
     page = QWebEnginePage(profile)
@@ -76,15 +76,15 @@ def main() -> int:
 
     def on_load(ok: bool):
         if not ok:
-            finish({"error": "страница не загрузилась"})
+            finish({"error": "the page did not load"})
             return
         QTimer.singleShot(SETTLE_MS, lambda: page.toHtml(lambda html: finish({"html": html})))
 
     page.loadFinished.connect(on_load)
-    QTimer.singleShot(timeout_ms, lambda: finish({"error": f"таймаут {timeout_ms // 1000} с"}))
+    QTimer.singleShot(timeout_ms, lambda: finish({"error": f"timeout {timeout_ms // 1000} s"}))
     page.load(QUrl(url))
     app.exec()
-    emit(result or {"error": "нет результата"})
+    emit(result or {"error": "no result"})
     page.deleteLater()
     del page, profile
     return 0 if "html" in result else 1
@@ -93,4 +93,4 @@ def main() -> int:
 if __name__ == "__main__":
     code = main()
     sys.stdout.flush()
-    os._exit(code)   # WebEngine иногда зависает при штатном выходе; результат уже выведен
+    os._exit(code)   # WebEngine sometimes hangs on a normal exit; the result has already been printed

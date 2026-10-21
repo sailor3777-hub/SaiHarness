@@ -1,4 +1,4 @@
-"""Переключение на длинный чат: лента внизу, даже когда Qt достраивает раскладку; прокрутка пользователя не отбирается."""
+"""Switching to a long chat: the feed is at the bottom even while Qt finishes the layout; the user's scrolling is not taken away."""
 import json, time
 from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QWheelEvent, QKeyEvent
@@ -18,9 +18,9 @@ CALLS = json.dumps([{"id": "c", "type": "function", "function": {"name": "call_t
 def chat(n):
     out = []
     for i in range(n):
-        out += [row("user", f"вопрос {i}"),
-                row("assistant", f"## Ответ {i}\n\n" + ("Длинный абзац текста для высоты. " * 12 + "\n\n") * 3 + "- пункт\n- пункт\n\n```python\nprint(1)\n```", "мысль\n" * 6),
-                row("assistant", "", "", CALLS), row("tool", "результат " * 40, "", "", "tb.calc")]
+        out += [row("user", f"question {i}"),
+                row("assistant", f"## Answer {i}\n\n" + ("A long paragraph of text for height. " * 12 + "\n\n") * 3 + "- item\n- item\n\n```python\nprint(1)\n```", "thought\n" * 6),
+                row("assistant", "", "", CALLS), row("tool", "result " * 40, "", "", "tb.calc")]
     return out
 def settle(ms):
     t = time.time()
@@ -36,37 +36,37 @@ for n in (5, 40, 150, 400, 1000):
     states = [at_bottom(bar)]
     for ms in (30, 100, 300, 800):
         settle(ms); states.append(at_bottom(bar))
-    check(f"{n:>4} пар: лента внизу сразу и на каждом шаге достройки раскладки", all(states), (bar.value(), bar.maximum(), states))
+    check(f"{n:>4} pairs: the feed is at the bottom at once and at every layout step", all(states), (bar.value(), bar.maximum(), states))
 v = new_view(); bar = v.history.verticalScrollBar(); v.set_messages(chat(400)); settle(1500)
-check("после достройки диапазон не меняется и лента внизу", at_bottom(bar) and bar.maximum() > 200000, (bar.value(), bar.maximum()))
-check("прилипание отпущено после паузы", v._stick_bottom is False)
+check("after the layout is finished the range does not change and the feed is at the bottom", at_bottom(bar) and bar.maximum() > 200000, (bar.value(), bar.maximum()))
+check("sticking is released after a pause", v._stick_bottom is False)
 
-# ---- прокрутка пользователя прерывает прилипание ----
+# ---- the user's scrolling interrupts sticking ----
 v = new_view(); bar = v.history.verticalScrollBar(); v.set_messages(chat(400)); settle(30)
 calls = []; orig_set = bar.setValue; bar.setValue = lambda x: (calls.append(x), orig_set(x))
 wheel(v, 360); settle(1000)
-check("колесо сразу после открытия: прилипание отпущено и чат сам больше не прокручивает", v._stick_bottom is False and calls == [], calls[:3])
+check("the wheel right after opening: sticking released and the chat no longer scrolls by itself", v._stick_bottom is False and calls == [], calls[:3])
 bar.setValue = orig_set
-v = new_view(); bar = v.history.verticalScrollBar(); v.set_messages(chat(150)); settle(800)   # раскладка уже достроена
+v = new_view(); bar = v.history.verticalScrollBar(); v.set_messages(chat(150)); settle(800)   # the layout is already finished
 wheel(v, 1200); settle(200); pos = bar.value()
-check("после достройки колесо уводит вверх и позиция держится", not at_bottom(bar) and bar.maximum() - pos > 100, (pos, bar.maximum()))
-settle(600); check("... без возврата вниз", bar.value() == pos)
+check("after the layout the wheel takes the view up and the position holds", not at_bottom(bar) and bar.maximum() - pos > 100, (pos, bar.maximum()))
+settle(600); check("... without jumping back down", bar.value() == pos)
 v = new_view(); bar = v.history.verticalScrollBar(); v.set_messages(chat(400)); settle(30)
 app.sendEvent(v.history, QKeyEvent(QEvent.KeyPress, Qt.Key_Up, Qt.NoModifier));
-check("клавиша тоже отпускает прилипание", v._stick_bottom is False)
+check("a key releases sticking too", v._stick_bottom is False)
 
-# ---- переключение туда и обратно ----
+# ---- switching there and back ----
 v = new_view(); bar = v.history.verticalScrollBar(); a, b = chat(300), chat(8)
 for payload in (a, b, a, b, a):
     v.set_messages(payload); settle(60)
 settle(800)
-check("быстрые переключения между чатами: в конце лента внизу", at_bottom(bar), (bar.value(), bar.maximum()))
+check("fast switching between chats: the feed ends up at the bottom", at_bottom(bar), (bar.value(), bar.maximum()))
 
-# ---- стрим по-прежнему работает ----
+# ---- streaming still works ----
 v = new_view(); bar = v.history.verticalScrollBar(); v.set_messages(chat(40)); settle(500); v.begin_live(); settle(50)
-for i in range(60): v.append_delta("content", "строка текста стрима\n"); v._flush()
-check("стрим: окно следит за новым текстом", at_bottom(bar))
+for i in range(60): v.append_delta("content", "a line of streamed text\n"); v._flush()
+check("stream: the window follows the new text", at_bottom(bar))
 bar.setValue(bar.maximum() // 2); settle(100); anchor = bar.value()
-for i in range(60): v.append_delta("content", "ещё строка\n"); v._flush()
-check("стрим: прокрутка вверх не отбирается", bar.value() == anchor, (bar.value(), anchor))
+for i in range(60): v.append_delta("content", "another line\n"); v._flush()
+check("stream: scrolling up is not taken away", bar.value() == anchor, (bar.value(), anchor))
 print("ALL OK" if ok_all else "SOME FAILED")

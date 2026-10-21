@@ -1,7 +1,7 @@
 ﻿import sys, pathlib, time
 from PySide6.QtWidgets import QApplication
 from core import db
-db.DB_PATH = pathlib.Path(sys.argv[1])  # временная база
+db.DB_PATH = pathlib.Path(sys.argv[1])  # a temporary database
 from ui.main_window import MainWindow
 
 ok_all = True
@@ -24,130 +24,130 @@ def send(text):
 def msgs(chat_id=None):
     return [r for r in db.list_messages(chat_id or w.chat_id) if r["role"] != "system"]
 
-# 1. без профиля
-send("привет")
-check("без профиля: подсказка, ввод не потерян, чат не создан",
-      "Выбери модель" in v.status.text() and v.input.toPlainText() == "привет" and db.list_chats() == [])
+# 1. no profile
+send("hello")
+check("no profile: a hint, the input is not lost, no chat created",
+      "Choose a model" in v.status.text() and v.input.toPlainText() == "hello" and db.list_chats() == [])
 v.input.clear()
 
-# 2. подключение и профиль
+# 2. connection and profile
 c = ctx.connections; c.name.setText("lmstudio"); c.url.setText("localhost:1234"); c.save_btn.click()
 b = ctx.builder
 wait(lambda: not b.models_req.busy)
-check("Builder подтянул модели с реального сервера", b.base_model.count() >= 1 and "gemma-4-e4b-it-erotica" in
+check("Builder loaded the models from the real server", b.base_model.count() >= 1 and "gemma-4-e4b-it-erotica" in
       [b.base_model.itemText(i) for i in range(b.base_model.count())])
 b.name.setText("gemma"); b.base_model.setCurrentText("gemma-4-e4b-it-erotica")
-b.system_prompt.setPlainText("Отвечай по-русски, очень кратко."); b.temperature.setValue(0.2); b.max_tokens.setValue(300)
+b.system_prompt.setPlainText("Answer in English, very briefly."); b.temperature.setValue(0.2); b.max_tokens.setValue(300)
 b.save_btn.click()
-check("профиль создан и выбран", sel.profile.currentText() == "gemma")
+check("the profile is created and selected", sel.profile.currentText() == "gemma")
 
-# 3. первый ответ
-send("Назови столицу Франции одним словом.")
-check("во время генерации: busy, статус, чат создан", not v.send_btn.isEnabled() and v.stop_btn.isEnabled()
-      and v.status.text() == "Генерация…" and w.chat_id is not None)
-check("модель закреплена сразу", db.get_chat(w.chat_id)["profile"] == "gemma" and not sel.profile.isEnabled())
+# 3. the first answer
+send("Name the capital of France in one word.")
+check("during generation: busy, status, chat created", not v.send_btn.isEnabled() and v.stop_btn.isEnabled()
+      and v.status.text() == "Generating…" and w.chat_id is not None)
+check("the model is locked at once", db.get_chat(w.chat_id)["profile"] == "gemma" and not sel.profile.isEnabled())
 chat_a = w.chat_id
-check("ответ завершился", wait(lambda: w.stream is None), "таймаут")
+check("the answer finished", wait(lambda: w.stream is None), "timeout")
 m = msgs()
-check("в БД user + assistant", [x["role"] for x in m] == ["user", "assistant"] and m[1]["content"].strip() != "", repr([x["content"] for x in m]))
-print("      ответ:", repr(m[1]["content"][:120]))
-check("кнопки возвращены, статус = профиль · модель", v.send_btn.isEnabled() and not v.stop_btn.isEnabled()
+check("in the DB user + assistant", [x["role"] for x in m] == ["user", "assistant"] and m[1]["content"].strip() != "", repr([x["content"] for x in m]))
+print("      answer:", repr(m[1]["content"][:120]))
+check("buttons are back, status = profile · model", v.send_btn.isEnabled() and not v.stop_btn.isEnabled()
       and v.status.text() == "gemma · gemma-4-e4b-it-erotica", v.status.text())
-check("ответ виден в истории", m[1]["content"].strip()[:10] in v.history.toPlainText())
+check("the answer is visible in the history", m[1]["content"].strip()[:10] in v.history.toPlainText())
 
-# 4. продолжение диалога (модель видит историю)
-send("Повтори мой предыдущий вопрос дословно.")
+# 4. continuing the dialog (the model sees the history)
+send("Repeat my previous question word for word.")
 wait(lambda: w.stream is None)
 m = msgs()
-check("диалог продолжается", len(m) == 4 and m[3]["content"].strip() != "")
-print("      ответ:", repr(m[3]["content"][:160]))
-check("модель увидела историю (упоминает Франц/столиц)", any(s in m[3]["content"].lower() for s in ("франц", "столиц")))
+check("the dialog goes on", len(m) == 4 and m[3]["content"].strip() != "")
+print("      answer:", repr(m[3]["content"][:160]))
+check("the model saw the history (mentions France/capital)", any(s in m[3]["content"].lower() for s in ("franc", "capital")))
 
-# профиль для длинных ответов (без команды отвечать кратко)
+# a profile for long answers (without the instruction to be brief)
 b.name.setText("story"); b.base_model.setCurrentText("gemma-4-e4b-it-erotica")
 b.system_prompt.setPlainText(""); b.temperature.setValue(0.7); b.max_tokens.setValue(3000); b.save_btn.click()
 got = lambda: (len(w.stream["content"]) + len(w.stream["reasoning"])) if w.stream else 0
 
-# 5. Стоп
+# 5. Stop
 w.new_chat(); chat_b = w.chat_id
 sel.select("story"); sel.user_changed.emit("story")
-check("в новом чате профиль разблокирован", sel.profile.isEnabled())
-send("Напиши длинный подробный рассказ про море, не меньше 20 абзацев.")
-check("пошли токены", wait(lambda: got() > 40, 60), "нет токенов")
+check("in a new chat the profile is unlocked", sel.profile.isEnabled())
+send("Write a long detailed story about the sea, at least 20 paragraphs.")
+check("tokens started coming", wait(lambda: got() > 40, 60), "no tokens")
 w.chat_view.stop_btn.click()
-check("стоп: сразу свободно, статус", w.stream is None and v.send_btn.isEnabled() and v.status.text() == "Остановлено")
+check("stop: free at once, status", w.stream is None and v.send_btn.isEnabled() and v.status.text() == "Stopped")
 m = msgs(chat_b)
-check("частичный ответ сохранён (с размышлениями, если они были)", len(m) == 2 and m[1]["role"] == "assistant"
+check("the partial answer is saved (with reasoning, if there was any)", len(m) == 2 and m[1]["role"] == "assistant"
       and len(m[1]["content"]) + len(m[1]["reasoning"]) > 20)
-print("      сохранено: content=%d симв., reasoning=%d симв." % (len(m[1]["content"]), len(m[1]["reasoning"])))
+print("      saved: content=%d chars, reasoning=%d chars" % (len(m[1]["content"]), len(m[1]["reasoning"])))
 snap = (m[1]["content"], m[1]["reasoning"]); time.sleep(1.5); app.processEvents()
 m2 = msgs(chat_b)
-check("после стопа ничего не дописывается", len(m2) == 2 and (m2[1]["content"], m2[1]["reasoning"]) == snap)
+check("nothing is added after the stop", len(m2) == 2 and (m2[1]["content"], m2[1]["reasoning"]) == snap)
 
-# 6. переключение чата во время генерации
+# 6. switching chats during generation
 w.new_chat(); chat_c = w.chat_id
 sel.select("story"); sel.user_changed.emit("story")
-send("Перечисли 40 разных животных через запятую.")
+send("List 40 different animals separated by commas.")
 wait(lambda: got() > 20, 60)
 for i in range(w.chat_list.list.count()):
     if w.chat_list.list.item(i).data(0x100) == chat_a:
         w.chat_list.list.setCurrentRow(i)
-check("в другом чате: отправка заблокирована, статус",
-      w.chat_id == chat_a and not v.send_btn.isEnabled() and "другом чате" in v.status.text())
-check("и профиль у чата A закреплён", not sel.profile.isEnabled())
+check("in another chat: sending is blocked, status",
+      w.chat_id == chat_a and not v.send_btn.isEnabled() and "another chat" in v.status.text())
+check("and chat A has its profile locked", not sel.profile.isEnabled())
 for i in range(w.chat_list.list.count()):
     if w.chat_list.list.item(i).data(0x100) == chat_c:
         w.chat_list.list.setCurrentRow(i)
 snapshot = (w.stream["reasoning"] or w.stream["content"])[:15] if w.stream else ""
-check("возврат в чат C: живой блок восстановлен", (not snapshot) or snapshot in v.history.toPlainText())
-check("генерация C завершилась", wait(lambda: w.stream is None))
+check("back to chat C: the live block is restored", (not snapshot) or snapshot in v.history.toPlainText())
+check("generation in C finished", wait(lambda: w.stream is None))
 m = msgs(chat_c)
-check("ответ C сохранён в C, а не в A", len(m) == 2 and (m[1]["content"].strip() or m[1]["reasoning"].strip())
+check("the answer of C is saved in C, not in A", len(m) == 2 and (m[1]["content"].strip() or m[1]["reasoning"].strip())
       and len(msgs(chat_a)) == 4)
 
-# 7a. сервер подменил модель (LM Studio отвечает загруженной на неизвестное имя)
+# 7a. the server substituted the model (LM Studio answers with the loaded one for an unknown name)
 w.new_chat()
 b.name.setText("ghost"); b.base_model.setCurrentText("no-such-model"); b.max_tokens.setValue(50); b.save_btn.click()
 sel.select("ghost"); sel.user_changed.emit("ghost")
-send("Скажи: привет")
+send("Say: hello")
 wait(lambda: w.stream is None, 60)
-swapped = "вместо «no-such-model»" in v.status.text() and "gemma-4-e4b-it-erotica" in v.status.text()
-rejected = "Invalid model identifier" in v.status.text() and "no-such-model" in v.status.text()  # новее LM Studio отвечает 400
-check("неизвестная модель: либо предупреждение о подмене, либо ошибка сервера", swapped or rejected, v.status.text())
-print("      статус:", v.status.text())
+swapped = "instead of \"no-such-model\"" in v.status.text() and "gemma-4-e4b-it-erotica" in v.status.text()
+rejected = "Invalid model identifier" in v.status.text() and "no-such-model" in v.status.text()  # newer LM Studio answers 400
+check("an unknown model: either a substitution warning or a server error", swapped or rejected, v.status.text())
+print("      status:", v.status.text())
 
-# 7b. недоступное подключение
+# 7b. an unreachable connection
 c._new(); c.name.setText("dead"); c.url.setText("localhost:1"); c.save_btn.click()
 wait(lambda: not b.models_req.busy)
 b.name.setText("deadp"); b.connection.setCurrentText("dead"); b.base_model.setCurrentText("whatever"); b.save_btn.click()
 w.new_chat(); sel.select("deadp"); sel.user_changed.emit("deadp")
-send("привет")
+send("hello")
 wait(lambda: w.stream is None, 60)
-check("ошибка связи в статусе, ассистента в БД нет", "Нет связи" in v.status.text() and [x["role"] for x in msgs()] == ["user"], v.status.text())
-check("после ошибки можно отправлять снова", v.send_btn.isEnabled())
-check("после ошибки чат закреплён за профилем", db.get_chat(w.chat_id)["profile"] == "deadp")
+check("a connection error in the status, no assistant in the DB", "Cannot reach" in v.status.text() and [x["role"] for x in msgs()] == ["user"], v.status.text())
+check("after the error sending works again", v.send_btn.isEnabled())
+check("after the error the chat is locked to the profile", db.get_chat(w.chat_id)["profile"] == "deadp")
 
-# 7c. обрыв по лимиту токенов
+# 7c. a cut-off by the token limit
 b.name.setText("tiny"); b.connection.setCurrentText("lmstudio"); b.base_model.setCurrentText("gemma-4-e4b-it-erotica")
 b.max_tokens.setValue(25); b.save_btn.click()
 w.new_chat(); sel.select("tiny"); sel.user_changed.emit("tiny")
-send("Напиши длинный подробный рассказ про море.")
+send("Write a long detailed story about the sea.")
 wait(lambda: w.stream is None, 60)
-check("обрыв по лимиту: предупреждение", "Лимит max tokens" in v.status.text(), v.status.text())
+check("cut-off by the limit: a warning", "Max tokens limit" in v.status.text(), v.status.text())
 m = msgs()
-check("обрыв по лимиту: частичный ответ сохранён", len(m) == 2 and (m[1]["content"] or m[1]["reasoning"]))
+check("cut-off by the limit: the partial answer is saved", len(m) == 2 and (m[1]["content"] or m[1]["reasoning"]))
 
-# 8. удаление чата во время генерации
+# 8. deleting a chat during generation
 from PySide6.QtWidgets import QMessageBox
 QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Yes)
 w.new_chat(); sel.select("story"); sel.user_changed.emit("story")
-send("Напиши очень длинную историю про космос.")
+send("Write a very long story about space.")
 wait(lambda: got() > 20, 60)
 doomed = w.chat_id
 w.chat_list._delete(w.chat_list.list.currentItem())
-check("удаление чата останавливает генерацию", w.stream is None and v.send_btn.isEnabled())
+check("deleting the chat stops generation", w.stream is None and v.send_btn.isEnabled())
 time.sleep(1.0); app.processEvents()
-check("в БД нет осиротевших сообщений", all(db.get_chat(r["chat_id"]) for r in db.connect().execute("SELECT DISTINCT chat_id FROM messages")))
+check("no orphaned messages in the DB", all(db.get_chat(r["chat_id"]) for r in db.connect().execute("SELECT DISTINCT chat_id FROM messages")))
 
 w.close()
 print("ALL OK" if ok_all else "SOME FAILED")

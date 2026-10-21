@@ -28,16 +28,16 @@ def _err() -> QBrush:
     return QBrush(QColor(themes.current().tool_error))
 
 
-POLICY_TAGS = {"ask": "  [спросит]", "deny": "  [запрещён]", "auto": ""}
-POLICY_NAMES = {"auto": "Выполнять без вопросов", "ask": "Спрашивать подтверждение", "deny": "Запретить"}
+POLICY_TAGS = {"ask": "  [asks]", "deny": "  [blocked]", "auto": ""}
+POLICY_NAMES = {"auto": "Run without asking", "ask": "Ask for confirmation", "deny": "Block"}
 CHECK = {True: Qt.Checked, False: Qt.Unchecked}
 
 
 class ToolsPanel(QWidget):
-    """MCP-серверы и их инструменты. Галочки выбирают, какие инструменты доступны модели в этом чате."""
+    """MCP servers and their tools. Checkboxes choose which tools the model can use in this chat."""
 
-    selection_changed = Signal()  # пользователь изменил набор включённых инструментов
-    catalog_changed = Signal()    # серверы (пере)подключены
+    selection_changed = Signal()  # the user changed the set of enabled tools
+    catalog_changed = Signal()    # servers were (re)connected
 
     def __init__(self, manager: McpManager, config_path: Path, auto_connect: bool = True):
         super().__init__()
@@ -49,39 +49,39 @@ class ToolsPanel(QWidget):
         self._updating = False
         self._error = ""
 
-        self.reconnect_btn = QPushButton("Перезапустить")
-        self.config_btn = QPushButton("Конфиг")
+        self.reconnect_btn = QPushButton("Restart")
+        self.config_btn = QPushButton("Config")
         buttons = QHBoxLayout()
         buttons.addWidget(self.reconnect_btn)
         buttons.addWidget(self.config_btn)
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabel("MCP-серверы и инструменты")
+        self.tree.setHeaderLabel("MCP servers and tools")
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.info = QLabel("")
         self.info.setWordWrap(True)
         self.info.setObjectName("status")
         self.vision_combo = QComboBox()
-        self.vision_combo.setToolTip("Модель с поддержкой изображений, которую вызывает инструмент vision_describe.\n"
-                                     "Профиль: берутся его подключение, модель, температура и лимит токенов.\n"
-                                     "Вручную: адрес сервера LM Studio, ключ и название модели вводятся здесь.")
+        self.vision_combo.setToolTip("A model with image support that the vision_describe tool calls.\n"
+                                     "Profile: its connection, model, temperature and token limit are used.\n"
+                                     "Manual: the LM Studio server address, key and model name are entered here.")
         vision_row = QHBoxLayout()
         vision_row.addWidget(QLabel("Vision:"))
         vision_row.addWidget(self.vision_combo, 1)
         self.vision_url = QLineEdit()
-        self.vision_url.setPlaceholderText("Адрес LM Studio: 192.168.1.5:1234 или http://host:1234/v1")
+        self.vision_url.setPlaceholderText("LM Studio address: 192.168.1.5:1234 or http://host:1234/v1")
         self.vision_key = QLineEdit()
-        self.vision_key.setPlaceholderText("Ключ API (если не нужен, пусто)")
+        self.vision_key.setPlaceholderText("API key (empty if not needed)")
         self.vision_key.setEchoMode(QLineEdit.Password)
         self.vision_model = QLineEdit()
-        self.vision_model.setPlaceholderText("Название модели с поддержкой изображений")
+        self.vision_model.setPlaceholderText("Name of a model with image support")
         self.vision_status = QLabel("")
         self.vision_status.setObjectName("status")
         self.vision_status.setWordWrap(True)
         self.vision_manual = [self.vision_url, self.vision_key, self.vision_model]
         self.comfy_url = QLineEdit()
-        self.comfy_url.setPlaceholderText("Картинки: адрес ComfyUI, например 192.168.1.5:8188")
-        self.comfy_url.setToolTip("Сервер ComfyUI, который вызывает инструмент image_generate.\n"
-                                  "Workflow (Save (API Format)) лежит в data/comfy_workflow.json.")
+        self.comfy_url.setPlaceholderText("Images: ComfyUI address, for example 192.168.1.5:8188")
+        self.comfy_url.setToolTip("The ComfyUI server that the image_generate tool calls.\n"
+                                  "The workflow (Save (API Format)) lives in data/comfy_workflow.json.")
         self.comfy_status = QLabel("")
         self.comfy_status.setObjectName("status")
         self.comfy_status.setWordWrap(True)
@@ -98,7 +98,7 @@ class ToolsPanel(QWidget):
 
         self.connect_req = AsyncCall(self._connect, self)
         self.connect_req.TIMEOUT_MS = 120_000
-        self.connect_req.TIMEOUT_TEXT = "Серверы не ответили за {seconds:g} с"
+        self.connect_req.TIMEOUT_TEXT = "The servers did not answer within {seconds:g} s"
         self.connect_req.succeeded.connect(self._on_connected)
         self.connect_req.failed.connect(self._on_connect_failed)
         self.connect_req.busy_changed.connect(lambda busy: self.reconnect_btn.setEnabled(not busy))
@@ -118,20 +118,20 @@ class ToolsPanel(QWidget):
         if auto_connect:
             self.connect_servers()
 
-    # --- подключение ---
+    # --- connecting ---
 
     def connect_servers(self):
         self._error = ""
-        self.info.setText("Подключаю серверы…")
+        self.info.setText("Connecting servers…")
         self.connect_req.start()
 
     def _connect(self) -> dict:
-        """В фоновом потоке: читает конфиг и подключает серверы."""
+        """In a background thread: reads the config and connects the servers."""
         return self.manager.connect_all(load_config(self.config_path, db.DB_PATH))
 
     def _on_connected(self, states: dict):
         self.states = states
-        self.tools = self.manager.all_tools()  # включённые id остаются в self.enabled, даже если сервер отвалился
+        self.tools = self.manager.all_tools()  # enabled ids stay in self.enabled even if the server dropped off
         self._rebuild()
         self.catalog_changed.emit()
 
@@ -150,16 +150,16 @@ class ToolsPanel(QWidget):
     # --- vision ---
 
     def refresh_vision_profiles(self):
-        """Список профилей в выпадающем списке (профили правятся на другой вкладке, поэтому обновляем при показе)."""
+        """Profiles in the drop-down list (profiles are edited on another tab, so the list is refreshed when shown)."""
         current = db.get_setting(VISION_PROFILE_KEY)
         names = [p["name"] for p in db.list_profiles()]
         self.vision_combo.blockSignals(True)
         self.vision_combo.clear()
-        self.vision_combo.addItem("Вручную (адрес, ключ, модель)", "")
+        self.vision_combo.addItem("Manual (address, key, model)", "")
         for name in names:
             self.vision_combo.addItem(name, name)
-        if current and current not in names:  # профиль удалили: показываем это, а не молча сбрасываем
-            self.vision_combo.addItem(f"{current} (не найден)", current)
+        if current and current not in names:  # the profile was deleted: show that instead of silently resetting
+            self.vision_combo.addItem(f"{current} (not found)", current)
         self.vision_combo.setCurrentIndex(max(0, self.vision_combo.findData(current)))
         self.vision_combo.blockSignals(False)
         for w, key in zip(self.vision_manual, (vision.VISION_URL_KEY, vision.VISION_API_KEY_KEY, vision.VISION_MODEL_KEY)):
@@ -172,7 +172,7 @@ class ToolsPanel(QWidget):
             w.setVisible(manual)
         if manual:
             ready = bool(self.vision_url.text().strip() and self.vision_model.text().strip())
-            self.vision_status.setText("" if ready else "Задай адрес и название модели: без них vision_describe не работает.")
+            self.vision_status.setText("" if ready else "Enter the address and model name: vision_describe does not work without them.")
         else:
             self.vision_status.setText("")
         self.vision_status.setVisible(bool(self.vision_status.text()))
@@ -182,12 +182,12 @@ class ToolsPanel(QWidget):
         self._update_vision_view()
 
     def _save_vision_manual(self):
-        """Ручные настройки vision: адрес приводится к виду http://host:port/v1."""
+        """Manual vision settings: the address is brought to the form http://host:port/v1."""
         raw_url = self.vision_url.text().strip()
         try:
             url = normalize_url(raw_url) if raw_url else ""
         except ValueError as e:
-            self.vision_status.setText(f"Адрес не подходит: {e}")
+            self.vision_status.setText(f"Invalid address: {e}")
             self.vision_status.setVisible(True)
             return
         self.vision_url.setText(url)
@@ -196,13 +196,13 @@ class ToolsPanel(QWidget):
         db.set_setting(vision.VISION_MODEL_KEY, self.vision_model.text().strip())
         self._update_vision_view()
 
-    # --- картинки (ComfyUI) ---
+    # --- images (ComfyUI) ---
 
     def _update_comfy_view(self, error: str = ""):
         if error:
-            text = f"Адрес не подходит: {error}"
+            text = f"Invalid address: {error}"
         elif not self.comfy_url.text().strip():
-            text = "Задай адрес ComfyUI: без него image_generate не работает."
+            text = "Enter the ComfyUI address: image_generate does not work without it."
         else:
             try:
                 imagegen.load_workflow()
@@ -229,16 +229,16 @@ class ToolsPanel(QWidget):
         self.comfy_url.setText(db.get_setting(imagegen.COMFY_URL_KEY))
         self._update_comfy_view()
 
-    # --- выбор ---
+    # --- selection ---
 
     def set_enabled(self, tool_ids: set[str]):
-        """Показать набор инструментов чата (без сигнала selection_changed)."""
+        """Show the chat's tool set (without the selection_changed signal)."""
         self.enabled = set(tool_ids)
         self._sync()
         self._render()
 
     def enabled_tools(self) -> list[ToolInfo]:
-        """Включённые инструменты, которые сейчас реально доступны (сервер подключён)."""
+        """Enabled tools that are actually available right now (the server is connected)."""
         wanted = with_requirements(self.enabled)
         return [t for t in self.tools if t.id in wanted]
 
@@ -275,7 +275,7 @@ class ToolsPanel(QWidget):
             act = menu.addAction(("✓ " if mode == current else "   ") + title)
             actions[act] = mode
         menu.addSeparator()
-        reset = menu.addAction(f"Сбросить (по умолчанию: {POLICY_NAMES[default_policy(tool)].lower()})")
+        reset = menu.addAction(f"Reset (default: {POLICY_NAMES[default_policy(tool)].lower()})")
         chosen = menu.exec(self.tree.viewport().mapToGlobal(pos))
         if chosen is reset:
             self.set_policy(tool.id, None)
@@ -290,7 +290,7 @@ class ToolsPanel(QWidget):
             self.policies[tool_id] = mode
         self._rebuild()
 
-    # --- дерево ---
+    # --- tree ---
 
     def _rebuild(self):
         expanded = {self.tree.topLevelItem(i).data(0, ID_ROLE) for i in range(self.tree.topLevelItemCount())
@@ -303,7 +303,7 @@ class ToolsPanel(QWidget):
             top.setData(0, ID_ROLE, name)
             top.setData(0, KIND_ROLE, "server")
             if state.status == "ready":
-                top.setText(0, f"● {name} — инструментов: {len(state.tools)}")
+                top.setText(0, f"● {name} — tools: {len(state.tools)}")
                 top.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
                 top.setCheckState(0, Qt.Unchecked)
                 for t in state.tools:
@@ -312,17 +312,17 @@ class ToolsPanel(QWidget):
                     child.setData(0, KIND_ROLE, "tool")
                     child.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
                     child.setCheckState(0, Qt.Unchecked)
-                    child.setToolTip(0, f"{t.description}\n\nПрава: {POLICY_NAMES[self.policy_for(t)]}\n"
-                                        "Правая кнопка мыши: изменить права.")
+                    child.setToolTip(0, f"{t.description}\n\nPermissions: {POLICY_NAMES[self.policy_for(t)]}\n"
+                                        "Right-click: change permissions.")
             elif state.status == "disabled":
-                top.setText(0, f"○ {name} — отключён в конфиге")
+                top.setText(0, f"○ {name} — disabled in the config")
                 top.setFlags(Qt.ItemIsEnabled)
                 top.setForeground(0, _dim())
             else:
-                top.setText(0, f"✗ {name} — ошибка")
+                top.setText(0, f"✗ {name} — error")
                 top.setFlags(Qt.ItemIsEnabled)
                 top.setForeground(0, _err())
-                note = QTreeWidgetItem(top, [state.error or "неизвестная ошибка"])
+                note = QTreeWidgetItem(top, [state.error or "unknown error"])
                 note.setData(0, KIND_ROLE, "note")
                 note.setFlags(Qt.ItemIsEnabled)
                 note.setForeground(0, _dim())
@@ -335,7 +335,7 @@ class ToolsPanel(QWidget):
 
     def _sync(self):
         self._updating = True
-        wanted = with_requirements(self.enabled)  # зависимости включённых инструментов отмечены, даже если их не выбирали
+        wanted = with_requirements(self.enabled)  # dependencies of enabled tools are checked even if they were not chosen
         try:
             for i in range(self.tree.topLevelItemCount()):
                 top = self.tree.topLevelItem(i)
@@ -352,28 +352,28 @@ class ToolsPanel(QWidget):
         finally:
             self._updating = False
 
-    # --- оценка размера ---
+    # --- size estimate ---
 
     def catalog_text(self) -> str:
         return Catalog(self.enabled_tools()).text()
 
     def prompt_tokens(self) -> int:
-        """Сколько токенов инструменты занимают в запросе: мета-инструменты и каталог (0, если ничего не включено)."""
+        """How many tokens the tools take in the request: meta-tools and catalog (0 if nothing is enabled)."""
         text = self.catalog_text()
         return meta_tools_tokens() + estimate_tokens(text) if text else 0
 
     def _render(self):
         if self._error:
-            self.info.setText(f"Не удалось подключить серверы: {self._error}")
+            self.info.setText(f"Could not connect the servers: {self._error}")
             return
         enabled = self.enabled_tools()
         if not self.states:
-            self.info.setText("Серверы ещё не подключены")
+            self.info.setText("Servers are not connected yet")
         elif not enabled:
-            self.info.setText("Инструменты не включены: в запрос они не попадают и ничего не стоят.")
+            self.info.setText("No tools enabled: they are not in the request and cost nothing.")
         else:
             full = schema_tokens(enabled)
             self.info.setText(
-                f"Включено: {len(enabled)}. В запросе ≈{self.prompt_tokens()} ток. (3 мета-инструмента и каталог). "
-                f"Полные схемы заняли бы ≈{full} ток."
+                f"Enabled: {len(enabled)}. In the request ≈{self.prompt_tokens()} tok. (3 meta-tools and the catalog). "
+                f"Full schemas would take ≈{full} tok."
             )

@@ -7,21 +7,21 @@ from core import diag, llm
 from core.context_builder import estimate_request_tokens
 from core.db import DEFAULT_MAX_STEPS
 
-CONTEXT_SAFETY = 1.15  # запас на погрешность оценки токенов (код она в среднем занижает на 15-20%)
+CONTEXT_SAFETY = 1.15  # margin for token estimate error (on average it underestimates code by 15-20%)
 
 
 def _fmt(n: int) -> str:
     return f"{n:,}".replace(",", " ")
 
 
-LIMIT_NUDGE = ("Лимит вызовов инструментов исчерпан, больше их вызывать нельзя. "
-               "Ответь пользователю текстом: что уже сделано и что осталось сделать.")
-STUCK_NUDGE = ("Инструмент {tool} несколько раз подряд вернул одну и ту же ошибку, поэтому инструменты отключены. "
-               "Ответь пользователю текстом: что удалось сделать, что не получилось и почему.")
+LIMIT_NUDGE = ("You have used up the tool call limit and cannot call tools any more. "
+               "Reply to the user in plain text: what has been done and what is still left to do.")
+STUCK_NUDGE = ("The tool {tool} returned the same error several times in a row, so tools are now disabled. "
+               "Reply to the user in plain text: what worked, what did not, and why.")
 
 
 class _CallThread(QThread):
-    """Выполняет одну функцию в фоне и возвращает результат сигналом."""
+    """Runs one function in the background and returns the result through a signal."""
 
     done = Signal(int, object)
     failed = Signal(int, str)
@@ -35,16 +35,16 @@ class _CallThread(QThread):
             self.done.emit(self.request_id, self._fn(*self._args))
         except llm.LLMError as e:
             self.failed.emit(self.request_id, str(e))
-        except Exception as e:  # поток не должен падать молча
-            self.failed.emit(self.request_id, f"Ошибка: {e}")
+        except Exception as e:  # the thread must not die silently
+            self.failed.emit(self.request_id, f"Error: {e}")
 
 
 class AsyncCall(QObject):
-    """Вызов функции в фоновом потоке с защитой от зависания.
+    """A function call in a background thread with protection against hangs.
 
-    Новый start() обесценивает предыдущий вызов (его результат игнорируется), а сторожевой
-    таймер гарантирует, что интерфейс получит результат или ошибку не позже TIMEOUT_MS,
-    даже если функция зависла.
+    A new start() invalidates the previous call (its result is ignored), and a watchdog
+    timer guarantees that the interface gets a result or an error within TIMEOUT_MS,
+    even if the function hangs.
     """
 
     succeeded = Signal(object)
@@ -52,7 +52,7 @@ class AsyncCall(QObject):
     busy_changed = Signal(bool)
 
     TIMEOUT_MS = 8000
-    TIMEOUT_TEXT = "Сервер не ответил за {seconds:g} с"
+    TIMEOUT_TEXT = "The server did not answer within {seconds:g} s"
 
     def __init__(self, fn, parent=None):
         super().__init__(parent)
@@ -81,7 +81,7 @@ class AsyncCall(QObject):
         t.start()
 
     def cancel(self):
-        """Отказаться от ожидаемого результата (он будет проигнорирован)."""
+        """Give up on the expected result (it will be ignored)."""
         self._seq += 1
         self._watchdog.stop()
         self._set_busy(False)
@@ -101,7 +101,7 @@ class AsyncCall(QObject):
             self.failed.emit(message)
 
     def _on_timeout(self):
-        self._seq += 1  # поздний результат этого вызова игнорируется
+        self._seq += 1  # a late result of this call is ignored
         self._settle()
         self.failed.emit(self.TIMEOUT_TEXT.format(seconds=self.TIMEOUT_MS / 1000))
 
@@ -115,16 +115,16 @@ class AsyncCall(QObject):
             self.busy_changed.emit(busy)
 
     def _reap(self):
-        """Забыть завершившиеся потоки (только когда ОС-поток уже закончил работу)."""
+        """Forget finished threads (only once the OS thread has actually ended)."""
         self._threads = {t for t in self._threads if not t.isFinished()}
 
 
 class CrawlThread(QThread):
-    """Обход одного сайта для локального поискового индекса. Свой поток и своё соединение с БД: обход идёт минуты,
-    поэтому сторожевой таймер AsyncCall тут не подходит; остановка кооперативная (stop())."""
+    """Crawls one site for the local search index. Its own thread and its own DB connection: a crawl takes minutes,
+    so AsyncCall's watchdog timer does not fit here; stopping is cooperative (stop())."""
 
-    progress = Signal(int, str)   # сохранено страниц, текущий адрес
-    finished_ok = Signal(object)  # итог crawl()
+    progress = Signal(int, str)   # pages saved, current address
+    finished_ok = Signal(object)  # result of crawl()
     failed = Signal(str)
 
     def __init__(self, source_id: int, db_path, parent=None):
@@ -141,7 +141,7 @@ class CrawlThread(QThread):
         from core.web.index import WebIndex
         from core.web.render import render_html
         conn = None
-        allow_private = os.environ.get("SAI_WEB_ALLOW_PRIVATE") == "1"  # только для тестов с локальным сервером
+        allow_private = os.environ.get("SAI_WEB_ALLOW_PRIVATE") == "1"  # only for tests with a local server
         try:
             conn = sqlite3.connect(self._db_path, timeout=30)
             fetcher = WebFetcher(renderer=lambda u: render_html(u, allow_private=allow_private), allow_private=allow_private,
@@ -150,22 +150,22 @@ class CrawlThread(QThread):
                 self.source_id, fetcher,
                 progress=lambda n, url: self.progress.emit(n, url), should_stop=self._stop.is_set)
             self.finished_ok.emit(result)
-        except Exception as e:  # поток не должен падать молча
-            self.failed.emit(f"Ошибка обхода: {e}")
+        except Exception as e:  # the thread must not die silently
+            self.failed.emit(f"Crawl error: {e}")
         finally:
             if conn is not None:
                 conn.close()
 
 
 class ModelListRequest(AsyncCall):
-    """start(url, api_key) -> succeeded(list[str]) со списком моделей сервера."""
+    """start(url, api_key) -> succeeded(list[str]) with the server's list of models."""
 
     def __init__(self, parent=None):
         super().__init__(llm.list_models, parent)
 
 
 class ContextLimitRequest(AsyncCall):
-    """start(url, api_key, model) -> succeeded((лимит | None, модель_загружена, макс. контекст | None))."""
+    """start(url, api_key, model) -> succeeded((limit | None, model_loaded, max context | None))."""
 
     TIMEOUT_MS = 5000
 
@@ -174,19 +174,19 @@ class ContextLimitRequest(AsyncCall):
 
 
 class ChatStreamer(QThread):
-    """Читает потоковый ответ модели в фоне и отдаёт куски в UI через сигналы.
+    """Reads the model's streamed reply in the background and passes chunks to the UI through signals.
 
-    Каждый сигнал несёт stream_id, чтобы UI мог игнорировать устаревшие потоки.
+    Every signal carries stream_id so that the UI can ignore stale streams.
     """
 
     delta = Signal(int, str, str)  # stream_id, kind ('reasoning' | 'content' | 'notice'), text
-    tool_running = Signal(int, str, str)  # stream_id, имя вызываемой функции, аргументы (JSON-строка)
-    tool_round = Signal(int, object, object)  # stream_id, сообщение модели с вызовами, результаты инструментов
-    usage = Signal(int, int, int, int)  # stream_id, токенов в запросе по счёту сервера, токенов в ответе, наша оценка запроса
+    tool_running = Signal(int, str, str)  # stream_id, name of the function being called, arguments (JSON string)
+    tool_round = Signal(int, object, object)  # stream_id, the model message with the calls, tool results
+    usage = Signal(int, int, int, int)  # stream_id, request tokens counted by the server, reply tokens, our request estimate
     failed = Signal(int, str)
     completed = Signal(int)
 
-    MAX_STEPS = DEFAULT_MAX_STEPS  # значение по умолчанию; у профиля модели оно настраивается
+    MAX_STEPS = DEFAULT_MAX_STEPS  # the default; it is configurable per model profile
 
     def __init__(self, stream_id: int, base_url: str, api_key: str, model: str,
                  messages: list, temperature: float, max_tokens: int,
@@ -196,14 +196,14 @@ class ChatStreamer(QThread):
         self.stream_id = stream_id
         self._args = (base_url, api_key, model, messages, temperature, max_tokens)
         self._tools, self._router = tools, router
-        self.max_steps = max_steps or self.MAX_STEPS  # сколько раундов «запрос, вызовы инструментов» допускается за ответ
-        # защита от переполнения контекста модели: лимит известен только у загруженной модели
+        self.max_steps = max_steps or self.MAX_STEPS  # how many "request, tool calls" rounds are allowed per reply
+        # protection against overflowing the model's context: the limit is known only for a loaded model
         self.context_limit = context_limit
-        self.reserve = min(max_tokens, context_limit // 4) if context_limit else 0  # запас на ответ
-        self.scale = scale  # поправка нашей оценки по замерам сервера
+        self.reserve = min(max_tokens, context_limit // 4) if context_limit else 0  # room for the reply
+        self.scale = scale  # correction of our estimate based on the server's measurements
         self._cancel = threading.Event()
-        # prepare(messages, notify) -> messages: подготовка запроса в потоке до первого обращения к модели
-        # (картинки: data-URL или описание от vision-модели, это может занять минуты)
+        # prepare(messages, notify) -> messages: preparing the request in the thread before the first call to the model
+        # (images: data URLs or a description from the vision model, which can take minutes)
         self._prepare = prepare
 
     def cancel(self):
@@ -225,12 +225,12 @@ class ChatStreamer(QThread):
         except llm.LLMError as e:
             if not self._cancel.is_set():
                 self.failed.emit(self.stream_id, str(e))
-        except Exception as e:  # поток не должен падать молча
+        except Exception as e:  # the thread must not die silently
             if not self._cancel.is_set():
-                self.failed.emit(self.stream_id, f"Ошибка: {e}")
+                self.failed.emit(self.stream_id, f"Error: {e}")
 
     def _estimate(self, messages: list, tools: list | None) -> tuple[int, int]:
-        """(сырая оценка запроса, оценка с поправкой и запасом прочности)."""
+        """(raw request estimate, estimate with the correction and the safety margin)."""
         raw = estimate_request_tokens(messages, tools)
         return raw, int(raw * self.scale * CONTEXT_SAFETY)
 
@@ -240,15 +240,15 @@ class ChatStreamer(QThread):
     def _overflow_error(self, messages: list, tools: list | None) -> llm.LLMError:
         estimated = self._estimate(messages, tools)[1]
         return llm.LLMError(
-            f"Контекст модели заполнен: запрос ≈{_fmt(estimated)} ток. и ответ до {_fmt(self.reserve)} не помещаются "
-            f"в {_fmt(self.context_limit)}. Начни новый чат или убери файлы и инструменты."
+            f"The model's context is full: the request ≈{_fmt(estimated)} tok. and a reply of up to {_fmt(self.reserve)} do not fit "
+            f"into {_fmt(self.context_limit)}. Start a new chat or remove files and tools."
         )
 
     def _request(self, messages: list, tools: list | None):
-        """Один запрос к модели: проверка контекста, запись в лог, настоящие замеры токенов от сервера."""
+        """One request to the model: context check, a log entry, real token measurements from the server."""
         base_url, api_key, model, _, temperature, max_tokens = self._args
         raw, estimated = self._estimate(messages, tools)
-        diag.note(f"[req] поток {self.stream_id} запрос≈{estimated} ток. (сырая оценка {raw}) лимит={self.context_limit} "
+        diag.note(f"[req] stream {self.stream_id} request≈{estimated} tok. (raw estimate {raw}) limit={self.context_limit} "
                   f"{diag.memory_summary()}")
         if not self._fits(messages, tools):
             raise self._overflow_error(messages, tools)
@@ -297,24 +297,24 @@ class ChatStreamer(QThread):
                     "content": self._router.handle(c["name"], c["arguments"]),
                 })
             if self._cancel.is_set():
-                return  # раунд не закончен: не сохраняем вызовы без результатов
+                return  # the round is not finished: calls without results are not saved
             messages.append({"role": "assistant", "content": content, "tool_calls": api_calls})
             messages += [{"role": "tool", "tool_call_id": r["tool_call_id"], "content": r["content"]} for r in results]
             self.tool_round.emit(
                 self.stream_id, {"content": content, "reasoning": reasoning, "tool_calls": api_calls}, results
             )
-            stuck = getattr(self._router, "stuck", None)  # инструмент заблокирован из-за повторяющейся ошибки
+            stuck = getattr(self._router, "stuck", None)  # a tool blocked because of a repeating error
             if stuck:
                 break
-        # Предел шагов (или зацикливание на сломанном инструменте). Без последнего слова пользователь остался бы
-        # ни с чем, поэтому просим модель подвести итог без инструментов. Эта реплика в историю чата не попадает.
-        # (Переполнение контекста ловит _request: он останавливает ответ понятной ошибкой перед любым запросом,
-        # который не поместится.)
+        # The step limit (or a loop on a broken tool). Without a final word the user would be left
+        # with nothing, so the model is asked to sum up without tools. This message does not go into the chat history.
+        # (Context overflow is caught by _request: it stops the reply with a clear error before any request
+        # that would not fit.)
         if stuck:
-            self.delta.emit(self.stream_id, "notice", f"Инструмент {stuck} повторяет одну и ту же ошибку, дальше без инструментов")
+            self.delta.emit(self.stream_id, "notice", f"Tool {stuck} keeps returning the same error, continuing without tools")
             messages.append({"role": "user", "content": STUCK_NUDGE.format(tool=stuck)})
         else:
-            self.delta.emit(self.stream_id, "notice", f"Достигнут предел шагов с инструментами ({self.max_steps})")
+            self.delta.emit(self.stream_id, "notice", f"Reached the tool step limit ({self.max_steps})")
             messages.append({"role": "user", "content": LIMIT_NUDGE})
         for kind, payload in self._request(messages, None):
             if self._cancel.is_set():
