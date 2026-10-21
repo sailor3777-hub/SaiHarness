@@ -131,6 +131,25 @@ check("the policy is saved in the DB and shown in the tree", db.load_tool_polici
       and any("[blocked]" in tp.tree.topLevelItem(0).child(i).text(0) for i in range(22)))
 tp.set_policy("toolbox.notes_write", None); check("policy reset", db.load_tool_policies() == {} and tp.policy_for(next(t for t in tp.tools if t.name == "notes_write")) == "ask")
 
+# ---------- auto-approve: "ask" runs without the window, "deny" stays blocked ----------
+from ui.tools_panel import AUTO_APPROVE_KEY
+check("auto-approve is off by default, no warning", not tp.auto_approve.isChecked() and tp.auto_warning.isHidden() and db.get_setting(AUTO_APPROVE_KEY) == "")
+QMessageBox.question = answer(QMessageBox.No); asked.clear()
+tp.auto_approve.setChecked(True)
+check("auto-approve: saved in the DB, warning shown", db.get_setting(AUTO_APPROVE_KEY) == "1" and not tp.auto_warning.isHidden())
+lm.script(write(), say("ok")); v.input.setPlainText("note with auto-approve"); v.send_btn.click(); wait(lambda: w.stream is None, 60)
+check("auto-approve: no question, the file is written", asked == [] and notes.exists() and notes.read_text(encoding="utf-8") == "my note")
+check("auto-approve does not change the stored policy or the tree tag", tp.policy_for(next(t for t in tp.tools if t.name == "notes_write")) == "ask"
+      and any(tp.tree.topLevelItem(0).child(i).text(0).startswith("notes_write") and "[asks]" in tp.tree.topLevelItem(0).child(i).text(0) for i in range(22)))
+tp.set_policy("toolbox.notes_write", "deny"); notes.unlink()
+lm.script(write(), say("ok")); v.input.setPlainText("blocked with auto-approve"); v.send_btn.click(); wait(lambda: w.stream is None, 60)
+last = [r for r in db.list_messages(w.chat_id) if r["role"] == "tool"][-1]
+check("auto-approve: deny stays blocked", asked == [] and "blocked" in last["content"] and not notes.exists(), last["content"])
+tp.set_policy("toolbox.notes_write", None); tp.auto_approve.setChecked(False)
+check("auto-approve off: the setting is removed, the warning hidden", db.get_setting(AUTO_APPROVE_KEY) == "" and tp.auto_warning.isHidden())
+lm.script(write(), say("ok")); v.input.setPlainText("note without auto-approve"); v.send_btn.click(); wait(lambda: w.stream is None, 60)
+check("auto-approve off: asks again", len(asked) == 1 and not notes.exists())
+
 # ---------- the model calls a tool that is not in the chat ----------
 tp.enabled.discard("toolbox.time_now"); tp._sync(); w._on_tools_changed()
 lm.script([tcall("n1", "call_tool", {"tool": "toolbox.time_now", "arguments": {}})], say("no"))

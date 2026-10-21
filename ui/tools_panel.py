@@ -4,7 +4,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem, QPushButton, QLabel, QMenu, QComboBox, QLineEdit,
+    QWidget, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem, QPushButton, QLabel, QMenu, QComboBox, QLineEdit, QCheckBox,
 )
 
 from core import db
@@ -31,6 +31,8 @@ def _err() -> QBrush:
 POLICY_TAGS = {"ask": "  [asks]", "deny": "  [blocked]", "auto": ""}
 POLICY_NAMES = {"auto": "Run without asking", "ask": "Ask for confirmation", "deny": "Block"}
 CHECK = {True: Qt.Checked, False: Qt.Unchecked}
+AUTO_APPROVE_KEY = "auto_approve"  # app_settings: "1" = calls that ask for confirmation run without the window
+AUTO_APPROVE_WARNING = "Auto-approve is on: write tools, shell_run and web_extract run without asking."
 
 
 class ToolsPanel(QWidget):
@@ -54,6 +56,13 @@ class ToolsPanel(QWidget):
         buttons = QHBoxLayout()
         buttons.addWidget(self.reconnect_btn)
         buttons.addWidget(self.config_btn)
+        self.auto_approve = QCheckBox("Auto-approve all confirmations")
+        self.auto_approve.setToolTip("Tools set to \"Ask for confirmation\" run without the window.\n"
+                                     "Blocked tools stay blocked. The setting applies to all chats.")
+        self.auto_approve.setChecked(db.get_setting(AUTO_APPROVE_KEY) == "1")
+        self.auto_warning = QLabel(AUTO_APPROVE_WARNING)
+        self.auto_warning.setObjectName("status")
+        self.auto_warning.setWordWrap(True)
         self.tree = QTreeWidget()
         self.tree.setHeaderLabel("MCP servers and tools")
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -87,6 +96,8 @@ class ToolsPanel(QWidget):
         self.comfy_status.setWordWrap(True)
         layout = QVBoxLayout(self)
         layout.addLayout(buttons)
+        layout.addWidget(self.auto_approve)
+        layout.addWidget(self.auto_warning)
         layout.addWidget(self.tree, 1)
         layout.addLayout(vision_row)
         for w in self.vision_manual:
@@ -105,6 +116,9 @@ class ToolsPanel(QWidget):
         self.reconnect_btn.clicked.connect(self.connect_servers)
         self.config_btn.clicked.connect(self._open_config)
         self.tree.itemChanged.connect(self._on_item_changed)
+        self.auto_approve.toggled.connect(self._on_auto_approve)
+        themes.bus.changed.connect(lambda _theme: self._update_auto_view())
+        self._update_auto_view()
         themes.bus.changed.connect(lambda _theme: self._rebuild())
         self.vision_combo.activated.connect(self._on_vision_chosen)
         for w in self.vision_manual:
@@ -244,6 +258,19 @@ class ToolsPanel(QWidget):
 
     def policy_for(self, tool: ToolInfo) -> str:
         return self.policies.get(tool.id) or default_policy(tool)
+
+    def effective_policy(self, tool: ToolInfo) -> str:
+        """The policy the router applies: with auto-approve "ask" becomes "auto" ("deny" stays)."""
+        policy = self.policy_for(tool)
+        return "auto" if policy == "ask" and self.auto_approve.isChecked() else policy
+
+    def _on_auto_approve(self, on: bool):
+        db.set_setting(AUTO_APPROVE_KEY, "1" if on else "")
+        self._update_auto_view()
+
+    def _update_auto_view(self):
+        self.auto_warning.setVisible(self.auto_approve.isChecked())
+        self.auto_warning.setStyleSheet(f"color: {themes.current().tool_error};")
 
     def _on_item_changed(self, item: QTreeWidgetItem, _column: int):
         if self._updating:
