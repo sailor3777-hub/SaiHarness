@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-SaiHarness is a PySide6 desktop harness for local LLMs served by LM Studio (OpenAI-compatible API, default `localhost:1234`). Python 3.14, venv in `.venv`, deps in `requirements.txt` (httpx, markdown-it-py, mcp, PySide6). The UI text, comments, and the user's chat language are Russian. Not a git repository.
+SaiHarness is a PySide6 desktop harness for local LLMs served by LM Studio (OpenAI-compatible API, default `localhost:1234`). Python 3.14, venv in `.venv`, deps in `requirements.txt` (httpx, markdown-it-py, mcp, PySide6). The UI text, comments, and the user's chat language are Russian. Git repo: private `https://github.com/sailor3777-hub/SaiHarness` (branch `main`); `data/`, `data_backup/`, `.venv/`, `test_sandbox/`, `.env` are in `.gitignore`. Workflow: after a finished change, show the diff and a proposed commit message, commit and push only after the user confirms.
 
 ## Commands
 
