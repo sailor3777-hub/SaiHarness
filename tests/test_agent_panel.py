@@ -60,7 +60,14 @@ check("the agent shows up in the list", panel.tree.topLevelItemCount() == 1
       and panel.tree.topLevelItem(0).text(0) == "alpha"
       and panel.tree.topLevelItem(0).text(1) == "pending")
 
-check("a duplicate name is refused", raises(RegistryInputError, lambda: panel.create_agent("alpha", out)))
+check("re-creating a still-pending agent reissues (no error)", bool(panel.create_agent("alpha", out)))
+
+# the installer address gets the port appended when the address has none
+panel.address.setText("10.0.0.9")
+panel.port.setText("9001")
+out_beta = str(tmp / "installer_beta.ps1")
+panel.create_agent("beta", out_beta)
+check("installer address gets the port appended", "10.0.0.9:9001" in Path(out_beta).read_text(encoding="utf-8"))
 
 # listener lifecycle (bind to an ephemeral port to avoid conflicts)
 panel.port.setText("0")
@@ -73,6 +80,7 @@ check("listener stops", not agent_mgr.is_running())
 check("revoke blocks the agent", panel.revoke(agent_id))
 with sqlite3.connect(db.DB_PATH) as conn:
     check("registry shows the agent revoked", Registry(conn).get(agent_id)["status"] == "revoked")
+check("re-creating a revoked name is refused", raises(RegistryInputError, lambda: panel.create_agent("alpha", out)))
 
 agent_mgr.shutdown()
 print("\nALL OK" if ok_all else "\nSOME FAILED")

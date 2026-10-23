@@ -67,14 +67,21 @@ if (-not (Test-Path $VenvPy)) { & $Python -m venv (Join-Path $InstallDir 'venv')
 & $VenvPy -m pip install --quiet --upgrade pip
 & $VenvPy -m pip install --quiet cryptography websockets
 
+$Pythonw = Join-Path $InstallDir 'venv\Scripts\pythonw.exe'
+if (-not (Test-Path $Pythonw)) { $Pythonw = $VenvPy }
 $HostScript = Join-Path $PkgDir 'core\agent\agent_host.py'
 $RunArgs = "`"$HostScript`" --dir `"$InstallDir`""
 
-# Auto-start at logon so the agent reconnects after reboots.
-$Action = "& `"$VenvPy`" $RunArgs"
-schtasks /Create /TN "SaiHarnessAgent-$AgentName" /SC ONLOGON /RL LIMITED /F `
-    /TR "powershell -NoProfile -WindowStyle Hidden -Command $Action" | Out-Null
+# Auto-start at logon so the agent reconnects after reboots. Register-ScheduledTask,
+# not schtasks.exe, whose /TR value is capped at 261 characters.
+try {
+    $Action  = New-ScheduledTaskAction -Execute $Pythonw -Argument $RunArgs
+    $Trigger = New-ScheduledTaskTrigger -AtLogOn
+    Register-ScheduledTask -TaskName "SaiHarnessAgent-$AgentName" -Action $Action -Trigger $Trigger -Force | Out-Null
+} catch {
+    Write-Host "Note: could not register the logon task ($($_.Exception.Message)); the agent still starts now."
+}
 
 Write-Host "Installed agent '$AgentName' -> $MainAddress"
 Write-Host "Starting now; it will enroll once with the one-time token and then stay connected."
-Start-Process -FilePath $VenvPy -ArgumentList $RunArgs -WindowStyle Hidden
+Start-Process -FilePath $Pythonw -ArgumentList $RunArgs -WindowStyle Hidden

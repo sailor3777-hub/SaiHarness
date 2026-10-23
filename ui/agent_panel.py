@@ -92,16 +92,28 @@ class AgentPanel(QWidget):
     def _registry(self) -> Registry:
         return Registry(sqlite3.connect(db.DB_PATH))
 
-    def create_agent(self, name: str, out_path: str) -> str:
-        """Create a pending agent and write its installer. Returns the one-time token.
+    def _installer_address(self) -> str:
+        """Host-reachable address for the installer: append the port if none was typed."""
+        addr = self.address.text().strip() or "MAIN-ADDRESS"
+        if ":" not in addr:
+            addr = f"{addr}:{self.port.text().strip() or DEFAULT_PORT}"
+        return addr
 
-        Raises RegistryInputError on a bad or duplicate name.
+    def create_agent(self, name: str, out_path: str) -> str:
+        """Create (or re-arm a still-pending) agent and write its installer. Returns the token.
+
+        Re-generating for an agent that has not enrolled yet reissues its token; a name
+        already taken by an active or revoked agent raises RegistryInputError.
         """
         with closing(self._registry()) as reg:
-            reg.conn.row_factory = sqlite3.Row
-            _, token = enroll.create_agent(reg, name)
-        script = installer.render(self.address.text().strip() or "MAIN-ADDRESS:PORT",
-                                  self.identity["ca_cert_pem"], token, name)
+            existing = reg.get_by_name(name)
+            if existing is not None and existing["status"] == "pending":
+                token = enroll.reissue(reg, existing["id"])
+            elif existing is not None:
+                raise RegistryInputError(f'the name "{name}" is already taken by a {existing["status"]} agent')
+            else:
+                _, token = enroll.create_agent(reg, name)
+        script = installer.render(self._installer_address(), self.identity["ca_cert_pem"], token, name)
         Path(out_path).write_text(script, encoding="utf-8")
         return token
 
