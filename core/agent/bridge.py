@@ -107,6 +107,11 @@ class Bridge:
     def connected_names(self) -> list[str]:
         return sorted(self._connected)
 
+    async def snapshot(self) -> list[dict]:
+        """Serializable view of the connected agents, for reading from another thread."""
+        return [{"name": a.name, "os": a.os, "tools": list(a.tools), "roots": list(a.roots)}
+                for a in self._connected.values()]
+
     def _registry(self) -> Registry:
         import sqlite3
         return Registry(sqlite3.connect(self.db_path))
