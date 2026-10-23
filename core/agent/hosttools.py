@@ -65,6 +65,21 @@ def host_name_from_server(server: str) -> str | None:
     return server[len(SERVER_PREFIX):] if is_host_server(server) else None
 
 
+def prompt_block(hosts) -> str:
+    """A short context block about the connected hosts, or "" when none are connected.
+
+    Mirrors core.memory.prompt_block: added to the system message only while it has
+    content, so the prompt does not grow when there are no agents. ``hosts`` is an
+    iterable of (name, os) pairs.
+    """
+    listed = ", ".join(f"{name} ({os or 'unknown OS'})" for name, os in hosts)
+    if not listed:
+        return ""
+    return ("Remote hosts: you have agents on other machines. Calling a host_<name>.<tool> tool "
+            "runs the command on that machine, where its effects are real and irreversible, so target "
+            f"the right host and confirm before anything destructive. Connected hosts: {listed}.")
+
+
 def tool_infos(host_name: str, os_name: str, tool_names) -> list[ToolInfo]:
     """ToolInfo entries for the tools a host announced. Unknown names are ignored."""
     server = server_name(host_name)

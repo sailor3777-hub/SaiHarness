@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMainWindow, QSplitter
 
 from core import db, images, llm, memory, vision
+from core.agent import hosttools
 from core.context_builder import build_messages, estimate_request_tokens
 from core.files import Selection
 from core.tools import META_TOOLS, Catalog, ToolRouter, describe_call, result_label
@@ -130,12 +131,24 @@ class MainWindow(QMainWindow):
         self._refresh_context_info()
 
     def _tools_text(self, profile, catalog) -> str:
-        """The tool catalog and, if memory tools are enabled, the profile's rules with the list of memory topics."""
+        """The tool catalog, plus the memory block (if memory tools are enabled) and the
+        connected-hosts block (if any remote host tools are in the catalog)."""
         if not catalog:
             return ""
         with closing(db.connect()) as conn:
             block = memory.prompt_block(profile["memory_rules"], [t.id for t in catalog.tools], memory.Memory(conn))
-        return catalog.text() + (f"\n\n{block}" if block else "")
+        parts = [catalog.text()]
+        if block:
+            parts.append(block)
+        agent = getattr(self.tools_panel, "agent", None)
+        if agent is not None and any(hosttools.is_host_server(t.server) for t in catalog.tools):
+            host_servers = {t.server for t in catalog.tools if hosttools.is_host_server(t.server)}
+            hosts = [(a["name"], a["os"]) for a in agent.connected()
+                     if hosttools.server_name(a["name"]) in host_servers]
+            agent_block = hosttools.prompt_block(hosts)
+            if agent_block:
+                parts.append(agent_block)
+        return "\n\n".join(parts)
 
     # --- context size ---
 

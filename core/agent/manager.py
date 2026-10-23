@@ -106,6 +106,10 @@ class AgentManager:
     def connected_names(self) -> list[str]:
         return sorted(a["name"] for a in self._snapshot())
 
+    def connected(self) -> list[dict]:
+        """Full view of the connected agents: {name, os, tools, roots}."""
+        return self._snapshot()
+
     def all_tools(self) -> list[ToolInfo]:
         infos: list[ToolInfo] = []
         for agent in self._snapshot():

@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 from core import markers
-from core.agent import ca, enroll, wrapper
+from core.agent import ca, enroll, hosttools, wrapper
 from core.agent.manager import AgentManager, CompositeManager
 from core.agent.registry import Registry
 from core.mcp_manager import ToolInfo
@@ -127,6 +127,15 @@ def main(db_path: str):
 
         cat = Catalog(tools)
         check("catalog resolves the host tool by id", cat.get("host_alpha.fs_read") is fsread)
+
+        # --- context block (Phase 5) ---
+        check("empty prompt_block is blank", hosttools.prompt_block([]) == "")
+        conn_hosts = agent_mgr.connected()
+        check("connected() reports the host and its OS",
+              bool(conn_hosts) and conn_hosts[0]["name"] == "alpha" and conn_hosts[0]["os"])
+        block = hosttools.prompt_block([(h["name"], h["os"]) for h in conn_hosts])
+        check("prompt_block names the host and explains remote tools",
+              "alpha" in block and "host_<name>" in block and "Remote hosts" in block)
 
         asked: list[str] = []
 
