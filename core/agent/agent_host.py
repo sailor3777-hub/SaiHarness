@@ -32,14 +32,15 @@ RECONNECT_BACKOFF = 3.0  # seconds between reconnection attempts
 
 
 def _load_config(install_dir: Path) -> dict:
-    return json.loads((install_dir / "agent.json").read_text(encoding="utf-8"))
+    # utf-8-sig: PowerShell's Set-Content -Encoding utf8 writes a BOM that plain utf-8 rejects.
+    return json.loads((install_dir / "agent.json").read_text(encoding="utf-8-sig"))
 
 
 def _token(install_dir: Path, token: str | None) -> str | None:
     if token:
         return token
     tf = install_dir / "enroll_token.txt"
-    return tf.read_text(encoding="utf-8").strip() if tf.exists() else None
+    return tf.read_text(encoding="utf-8-sig").strip() if tf.exists() else None
 
 
 async def supervise(install_dir, token: str | None = None,

@@ -73,6 +73,12 @@ check("package excludes core/docs.py (pypdf/python-docx)", "core/docs.py" not in
 files_src = zipfile.ZipFile(io.BytesIO(pkg)).read("core/files.py").decode("utf-8")
 check("shipped files.py has no top-level docs import", "\nfrom core import docs" not in files_src)
 
+# agent.json written by PowerShell carries a UTF-8 BOM; _load_config must tolerate it
+_bom = Path(tempfile.mkdtemp(prefix="sai_bom_"))
+(_bom / "agent.json").write_text('{"name": "x", "address": "127.0.0.1:1", "roots": []}', encoding="utf-8-sig")
+check("config load tolerates a UTF-8 BOM", agent_host._load_config(_bom)["name"] == "x")
+shutil.rmtree(_bom, ignore_errors=True)
+
 # --- render embeds the package and fills placeholders ----------------------
 ca_key, ca_cert = ca.generate_ca()
 script = installer.render("192.168.1.10:8765", ca_cert, "TOKEN-xyz", "alpha", package=pkg)
