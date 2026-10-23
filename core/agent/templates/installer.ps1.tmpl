@@ -98,4 +98,6 @@ try {
 
 Write-Host "Installed agent '$AgentName' -> $MainAddress"
 Write-Host "Starting now; it will enroll once with the one-time token and then stay connected."
-Start-Process -FilePath $Pythonw -ArgumentList $RunArgs -WindowStyle Hidden
+Write-Host "Logs: $InstallDir\agent.log (and agent.err.log for startup crashes)."
+# pythonw has no console; redirect stderr so a startup crash is still visible.
+Start-Process -FilePath $Pythonw -ArgumentList $RunArgs -RedirectStandardError (Join-Path $InstallDir 'agent.err.log')

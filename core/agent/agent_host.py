@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -43,10 +44,26 @@ def _token(install_dir: Path, token: str | None) -> str | None:
     return tf.read_text(encoding="utf-8-sig").strip() if tf.exists() else None
 
 
+def _logger(install_dir: Path) -> logging.Logger:
+    """A logger that appends to agent.log in the install folder. The headless agent
+    (pythonw, no console) has no other way to report what happened."""
+    log = logging.getLogger("saiharness.agent")
+    if not log.handlers:
+        log.setLevel(logging.INFO)
+        try:
+            handler = logging.FileHandler(install_dir / "agent.log", encoding="utf-8")
+            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+            log.addHandler(handler)
+        except OSError:
+            log.addHandler(logging.NullHandler())  # never let logging break the agent
+    return log
+
+
 async def supervise(install_dir, token: str | None = None,
                     backoff: float = RECONNECT_BACKOFF, stop: "asyncio.Event | None" = None):
     """Enroll if needed, then keep reconnecting until ``stop`` is set."""
     install_dir = Path(install_dir)
+    log = _logger(install_dir)
     cfg = _load_config(install_dir)
     name, address, roots = cfg["name"], cfg["address"], cfg.get("roots", [])
     ca_path = str(install_dir / "ca_cert.pem")
@@ -54,21 +71,31 @@ async def supervise(install_dir, token: str | None = None,
     cert_path = install_dir / "client_cert.pem"
     url = address if address.startswith("wss://") else f"wss://{address}"
     host = wrapper.ToolHost(roots)
+    log.info("supervise start: name=%s url=%s roots=%s", name, url, roots)
 
     if not (cert_path.exists() and key_path.exists()):
         tok = _token(install_dir, token)
         if not tok:
+            log.error("no enrollment token and no certificate yet")
             raise wrapper.EnrollmentFailed("no enrollment token and no certificate yet")
-        await wrapper.enroll_over_channel(url, ca_path, tok, name, str(key_path), str(cert_path))
+        log.info("enrolling with the one-time token")
+        try:
+            await wrapper.enroll_over_channel(url, ca_path, tok, name, str(key_path), str(cert_path))
+        except Exception:
+            log.exception("enrollment failed")
+            raise
         (install_dir / "enroll_token.txt").unlink(missing_ok=True)  # burn the local copy
+        log.info("enrolled; certificate saved")
 
     while not (stop is not None and stop.is_set()):
         try:
+            log.info("connecting")
             await wrapper.run_agent(url, ca_path, str(cert_path), str(key_path), name, host)
+            log.info("disconnected")
         except asyncio.CancelledError:
             raise
         except Exception:
-            pass  # connection dropped or refused; back off and retry
+            log.exception("connection error; will retry")
         if stop is not None and stop.is_set():
             break
         try:
@@ -88,6 +115,12 @@ def main(argv: list[str] | None = None) -> int:
         asyncio.run(supervise(args.dir, args.token))
     except KeyboardInterrupt:
         return 0
+    except Exception:
+        try:
+            _logger(Path(args.dir)).exception("agent exited with an error")
+        except Exception:
+            pass
+        raise
     return 0
 
 
