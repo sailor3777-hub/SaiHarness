@@ -43,23 +43,37 @@ New-Item -ItemType Directory -Force -Path $PkgDir | Out-Null
 Expand-Archive -Path (Join-Path $InstallDir 'pkg.zip') -DestinationPath $PkgDir -Force
 Remove-Item (Join-Path $InstallDir 'pkg.zip') -Force
 
-# Find a Python interpreter (3.11+).
+# Find a Python 3.11+ interpreter. Skip the Microsoft Store alias stubs under
+# WindowsApps, and also look in the standard install locations, because a fresh
+# winget install does not update PATH for the current session.
 function Find-Python {
-    foreach ($c in @('py', 'python', 'python3')) {
-        $exe = (Get-Command $c -ErrorAction SilentlyContinue)
-        if ($exe) {
-            try { & $exe.Source -c "import sys; raise SystemExit(0 if sys.version_info[:2] >= (3,11) else 1)"; if ($LASTEXITCODE -eq 0) { return $exe.Source } } catch {}
-        }
+    $cands = @()
+    foreach ($c in @('py', 'python')) {
+        $g = Get-Command $c -ErrorAction SilentlyContinue
+        if ($g -and $g.Source -and $g.Source -notlike '*\WindowsApps\*') { $cands += $g.Source }
+    }
+    $globs = @(
+        (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python3*\python.exe'),
+        (Join-Path $env:ProgramFiles 'Python3*\python.exe')
+    )
+    $cands += Get-ChildItem -Path $globs -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+    foreach ($exe in ($cands | Select-Object -Unique)) {
+        try {
+            & $exe -c "import sys; raise SystemExit(0 if sys.version_info[:2] >= (3,11) else 1)" 2>$null
+            if ($LASTEXITCODE -eq 0) { return $exe }
+        } catch {}
     }
     return $null
 }
 $Python = Find-Python
 if (-not $Python) {
     Write-Host "Installing Python 3.14 via winget..."
-    winget install -e --id Python.Python.3.14 --accept-source-agreements --accept-package-agreements
+    winget install -e --id Python.Python.3.14 --scope user --accept-source-agreements --accept-package-agreements
+    # winget does not update PATH for the current session; refresh it, then retry.
+    $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
     $Python = Find-Python
 }
-if (-not $Python) { throw "Python 3.11+ is required and could not be installed automatically." }
+if (-not $Python) { throw "Python 3.11+ is required. Install it from python.org and re-run this installer." }
 
 # Virtual environment with the two third-party dependencies.
 $VenvPy = Join-Path $InstallDir 'venv\Scripts\python.exe'
