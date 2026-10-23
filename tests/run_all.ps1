@@ -12,7 +12,7 @@ $env:PYTHONPATH = $root
 
 $offline = "test_richtext", "test_llm_stream", "test_diag", "test_token_estimator", "test_context_guard", "test_connections",
            "test_builder_profiles", "test_mcp_server", "test_tools_router_agent", "test_window_tools", "test_fs_replace",
-           "test_fs_replace_window", "test_shell", "test_office_write", "test_themes", "test_bootstrap", "test_max_steps_profile", "test_web_basics", "test_web_fetch_index", "test_web_searxng", "test_web_tools", "test_web_panel", "test_vision", "test_imagegen", "test_images", "test_docs", "test_memory", "test_memory_tools", "test_memory_panel", "test_permission_dialog", "test_markers"
+           "test_fs_replace_window", "test_shell", "test_office_write", "test_themes", "test_bootstrap", "test_max_steps_profile", "test_web_basics", "test_web_fetch_index", "test_web_searxng", "test_web_tools", "test_web_panel", "test_vision", "test_imagegen", "test_images", "test_docs", "test_memory", "test_memory_tools", "test_memory_panel", "test_permission_dialog", "test_markers", "test_agent_ca"
 $guiTests = "test_stream_scroll", "test_scroll_to_bottom", "test_render_pixels"
 $liveTests = "test_connection_check_watchdog", "test_files_core", "test_files_panel_live", "test_live_chat"
 
