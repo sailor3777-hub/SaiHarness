@@ -10,7 +10,6 @@ import os
 from collections import Counter
 from dataclasses import dataclass, field
 
-from core import docs
 from core.markers import NOT_FOUND
 
 IGNORE_DIRS = {
@@ -252,6 +251,7 @@ def expand_selection(sel: Selection, roots: list[str]) -> tuple[list[str], bool,
 
 def load_context(sel: Selection, roots: list[str]) -> ContextBundle:
     """Reads the selected files within the limits. Call from a background thread for large selections."""
+    from core import docs  # local import: the agent host reuses this module without pypdf/python-docx
     bundle = ContextBundle()
     if sel.is_empty():
         return bundle
