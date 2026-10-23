@@ -65,6 +65,9 @@ class Registry:
         self.conn.row_factory = sqlite3.Row
         ensure_schema(conn)
 
+    def close(self):
+        self.conn.close()
+
     # --- creation -----------------------------------------------------------
 
     def create(self, name: str, token_hash: str, token_ttl_days: int) -> int:

@@ -312,7 +312,7 @@ class MainWindow(QMainWindow):
         self.chat_view.clear_pending()
         self.chat_view.append_message("user", text, image_paths=picked)
 
-        router = ToolRouter(self.tools_panel.manager, catalog, policy_for=self.tools_panel.effective_policy) if catalog else None
+        router = ToolRouter(self.tools_panel.router_manager, catalog, policy_for=self.tools_panel.effective_policy) if catalog else None
         messages = build_messages(
             profile, db.list_messages(self.chat_id), bundle.files, self._tools_text(profile, catalog)
         )

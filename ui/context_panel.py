@@ -8,8 +8,11 @@ from PySide6.QtWidgets import (
 )
 
 from core import db
+from core.agent import identity
+from core.agent.manager import AgentManager
 from core.mcp_manager import McpManager
 from core.memory import DEFAULT_RULES
+from ui.agent_panel import AgentPanel
 from ui.connection_panel import ConnectionPanel
 from ui.files_panel import FilesPanel
 from ui.memory_panel import MemoryPanel
@@ -281,7 +284,10 @@ class ContextPanel(QWidget):
         tabs.addTab(self.files_panel, "Files")
 
         self.mcp = McpManager(log_dir=db.DB_PATH.parent / "logs")
-        self.tools_panel = ToolsPanel(self.mcp, mcp_config or db.DB_PATH.parent / "mcp.json", auto_connect=connect_mcp)
+        self._identity = identity.ensure_identity(db.DB_PATH.parent / "agent")
+        self.agent = AgentManager.from_identity(self._identity, str(db.DB_PATH))
+        self.tools_panel = ToolsPanel(self.mcp, mcp_config or db.DB_PATH.parent / "mcp.json",
+                                      auto_connect=connect_mcp, agent=self.agent)
         tabs.addTab(self.tools_panel, "Tools")
 
         self.web_panel = WebPanel()
@@ -289,6 +295,9 @@ class ContextPanel(QWidget):
 
         self.memory_panel = MemoryPanel()
         tabs.addTab(self.memory_panel, "Memory")
+
+        self.agent_panel = AgentPanel(self.agent, self._identity)
+        tabs.addTab(self.agent_panel, "Agent")
 
         self.model_selector = ModelSelector()
         tabs.addTab(self.model_selector, "Model")
@@ -323,3 +332,4 @@ class ContextPanel(QWidget):
         self.tools_panel.wait_threads()
         self.web_panel.wait_threads()
         self.mcp.shutdown()
+        self.agent.shutdown()

@@ -41,9 +41,17 @@ class ToolsPanel(QWidget):
     selection_changed = Signal()  # the user changed the set of enabled tools
     catalog_changed = Signal()    # servers were (re)connected
 
-    def __init__(self, manager: McpManager, config_path: Path, auto_connect: bool = True):
+    def __init__(self, manager: McpManager, config_path: Path, auto_connect: bool = True, agent=None):
         super().__init__()
         self.manager, self.config_path = manager, config_path
+        # Connected remote hosts (core.agent.manager.AgentManager): their tools are always
+        # available while the host is connected, so they do not need per-chat checkboxes.
+        self.agent = agent
+        if agent is not None:
+            from core.agent.manager import CompositeManager
+            self.router_manager = CompositeManager(manager, agent)
+        else:
+            self.router_manager = manager
         self.enabled: set[str] = set()
         self.policies: dict[str, str] = db.load_tool_policies()
         self.tools: list[ToolInfo] = []
@@ -252,9 +260,16 @@ class ToolsPanel(QWidget):
         self._render()
 
     def enabled_tools(self) -> list[ToolInfo]:
-        """Enabled tools that are actually available right now (the server is connected)."""
+        """Enabled tools that are actually available right now (the server is connected).
+
+        Connected remote-host tools are always included: a connected host means the
+        user set it up and allowed it, so its tools are offered without a per-chat checkbox.
+        """
         wanted = with_requirements(self.enabled)
-        return [t for t in self.tools if t.id in wanted]
+        tools = [t for t in self.tools if t.id in wanted]
+        if self.agent is not None:
+            tools += self.agent.all_tools()
+        return tools
 
     def policy_for(self, tool: ToolInfo) -> str:
         return self.policies.get(tool.id) or default_policy(tool)

@@ -30,6 +30,14 @@ class AgentManager:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._running = False
+
+    @classmethod
+    def from_identity(cls, identity: dict, db_path: str) -> "AgentManager":
+        """Build from core.agent.identity.ensure_identity() output."""
+        return cls(identity["ca_key_pem"], identity["ca_cert_pem"],
+                   identity["server_cert_path"], identity["server_key_path"],
+                   identity["ca_cert_path"], db_path)
 
     # --- loop thread --------------------------------------------------------
 
@@ -56,16 +64,32 @@ class AgentManager:
     # --- lifecycle ----------------------------------------------------------
 
     def start(self, host: str = "127.0.0.1", port: int = 0):
+        """Start the listener. No-op if already running. Raises OSError on a bad bind."""
+        if self._running:
+            return
         self._run(self._bridge.start(host, port), 15)
+        self._running = True
+
+    def is_running(self) -> bool:
+        return self._running
 
     def port(self) -> int:
         return self._bridge.port()
+
+    def stop(self):
+        """Stop the listener but keep the loop thread, so it can be started again."""
+        if self._loop is None or not self._running:
+            return
+        self._run(self._bridge.stop(), 15)
+        self._running = False
 
     def shutdown(self):
         if self._loop is None:
             return
         try:
-            self._run(self._bridge.stop(), 15)
+            if self._running:
+                self._run(self._bridge.stop(), 15)
+                self._running = False
         finally:
             self._loop.call_soon_threadsafe(self._loop.stop)
 
