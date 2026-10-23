@@ -20,6 +20,7 @@ without knowing the object model. Validity is bounded in days from "now" in UTC.
 from __future__ import annotations
 
 import datetime
+import hashlib
 import ipaddress
 
 from cryptography import x509
@@ -193,6 +194,12 @@ def sign_csr(
 def fingerprint(cert_pem: bytes) -> str:
     """Lowercase hex SHA-256 of the DER certificate. The registry key for an agent."""
     return load_certificate(cert_pem).fingerprint(_HASH).hex()
+
+
+def fingerprint_der(der: bytes) -> str:
+    """Same fingerprint computed from a DER certificate, as the TLS handshake hands it
+    to the server. Equals ``fingerprint`` of the PEM form of the same certificate."""
+    return hashlib.sha256(der).hexdigest()
 
 
 def verify_signed_by_ca(cert_pem: bytes, ca_cert_pem: bytes) -> bool:
