@@ -6,7 +6,6 @@ the name, description and argument schema are taken from it automatically.
 """
 import ast
 import functools
-import itertools
 import json
 import operator
 import os
@@ -597,22 +596,7 @@ def memory_delete(id: int) -> str:
 
 
 SHELL_DIR = Path(os.environ.get("SAI_SHELL_DIR") or Path(__file__).resolve().parent / "data" / "shell")
-SHELL_KEEP = 20           # how many recent shell_run outputs to keep for shell_output
-_shell_outputs: dict[int, str] = {}
-_shell_ids = itertools.count(1)
-
-
-def _shell_chunk(run_id: int, text: str, offset: int, header: str = "") -> str:
-    start = max(0, int(offset))
-    if start >= len(text) and start > 0:
-        return ERROR_PREFIX + f"offset {start} is past the end of the output (it has {len(text)} characters)"
-    limit = MAX_READ_CHARS - len(header) - 200  # room for the hint at the end
-    chunk = text[start:start + limit]
-    end = start + len(chunk)
-    if end < len(text):
-        return (f"{header}{chunk}\n[truncated: showing characters {start}–{end} of {len(text)}; to continue: "
-                f"shell_output with run_id={run_id}, offset={end}]")
-    return f"{header}{chunk}" + (f"\n[shown from character {start} to the end, {len(text)} in total]" if start else "")
+_jobs = shell.Jobs()  # the commands of this session: shell_output and shell_stop find them by run_id
 
 
 def _shell_default_dir() -> Path:
@@ -626,8 +610,9 @@ def _shell_default_dir() -> Path:
 
 @tool("Runs a PowerShell command and returns the exit code and output (stdout and stderr together). cwd: the working "
       "folder, any folder on the computer (empty: the first of the user's allowed folders, or without them a service "
-      "folder). Limit 60 seconds, then the command is killed. The user confirms every call. The command can create and "
-      "change files anywhere. Long output is truncated; shell_output reads the rest by run_id.",
+      "folder). Waits up to 45 seconds; a command that is not done by then keeps running in the background (up to 1 hour) "
+      "and the reply says so: follow it with shell_output (run_id, offset), stop it with shell_stop. The user confirms "
+      "every call. The command can create and change files anywhere. Long output is truncated; shell_output reads the rest.",
       ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=True))
 def shell_run(command: str, cwd: str = "") -> str:
     if not command.strip():
@@ -640,16 +625,11 @@ def shell_run(command: str, cwd: str = "") -> str:
         workdir = default
     if not workdir.is_dir():
         return ERROR_PREFIX + f"cwd is not a folder or does not exist: {workdir}"
-    code, output, timed_out = shell.run(command, str(workdir))
-    if code is None and not timed_out:
-        return ERROR_PREFIX + f"{output}"
-    run_id = next(_shell_ids)
-    _shell_outputs[run_id] = output
-    for old in [k for k in _shell_outputs if k <= run_id - SHELL_KEEP]:
-        del _shell_outputs[old]
-    status = (f"TIMEOUT: the command was killed after {shell.TIMEOUT:g} s" if timed_out else f"exit code {code}")
-    header = f"[{status}; folder {workdir}; run_id={run_id}]\n"
-    return _shell_chunk(run_id, output if output else "(no output)", 0, header)
+    job, err = _jobs.start(command, str(workdir))
+    if job is None:
+        return ERROR_PREFIX + err
+    job.wait(shell.WAIT)
+    return shell.render(job, 0, MAX_READ_CHARS)[0]
 
 
 def _new_file_path(path: str) -> Path:
@@ -678,13 +658,26 @@ def xlsx_write(path: str, sheets: dict[str, list[list[str | int | float | bool |
     return text if text else ERROR_PREFIX + f"{reason}"
 
 
-@tool("Reads more of the output of a command run by shell_run: run_id from its reply, offset from the hint at the end. "
+@tool("Reads the output of a command started by shell_run: run_id from its reply, offset from the hint at the end "
+      "(output already read is skipped). Also shows whether the command is still running or its exit code. "
       "The command is not run again.", READ_ONLY)
 def shell_output(run_id: int, offset: int = 0) -> str:
-    text = _shell_outputs.get(int(run_id))
-    if text is None:
-        return ERROR_PREFIX + f"there is no output with run_id={run_id} (the last {SHELL_KEEP} runs of this session are kept)."
-    return _shell_chunk(int(run_id), text if text else "(no output)", offset)
+    job = _jobs.get(run_id)
+    if job is None:
+        return ERROR_PREFIX + f"there is no command with run_id={run_id} (the last {shell.KEEP_JOBS} of this session are kept)."
+    text, is_error = shell.render(job, offset, MAX_READ_CHARS)
+    return ERROR_PREFIX + text if is_error else text
+
+
+@tool("Stops a command started by shell_run that is still running in the background (kills it and what it started). "
+      "run_id from the shell_run reply. The user confirms the call.", WRITE)
+def shell_stop(run_id: int) -> str:
+    job = _jobs.get(run_id)
+    if job is None:
+        return ERROR_PREFIX + f"there is no command with run_id={run_id} (the last {shell.KEEP_JOBS} of this session are kept)."
+    if not job.stop():
+        return f"run_id={run_id} is not running ({shell.render(job, 0, 200)[0].splitlines()[0]})."
+    return f"run_id={run_id} was stopped. Output so far: shell_output with run_id={run_id}."
 
 
 if __name__ == "__main__":

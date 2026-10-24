@@ -13,6 +13,7 @@ ARG_LABELS = {  # readable argument labels for the confirmation window
     "toolbox.notes_write": {"name": "Note", "content": "Text"},
     "toolbox.web_extract": {"url": "Address", "char_limit": "Character limit"},
     "toolbox.shell_run": {"command": "PowerShell command", "cwd": "Folder"},
+    "toolbox.shell_stop": {"run_id": "Command number"},
     "toolbox.docx_write": {"path": "File", "markdown": "Text (Markdown)", "overwrite": "Replace existing"},
     "toolbox.memory_save": {"topic": "Topic", "title": "Title", "text": "What to remember"},
     "toolbox.memory_delete": {"id": "Entry number"},

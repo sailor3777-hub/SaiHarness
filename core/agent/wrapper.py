@@ -49,9 +49,10 @@ class ToolHost:
 
     def __init__(self, roots):
         self.roots = [Path(r).resolve() for r in roots if Path(r).is_dir()]
+        self.jobs = shell.Jobs()  # background commands of this agent, found by run_id
 
     def tool_names(self) -> list[str]:
-        return ["shell_run", "fs_read", "fs_list", "fs_search"]
+        return ["shell_run", "shell_output", "shell_stop", "fs_read", "fs_list", "fs_search"]
 
     def run(self, tool: str, args: dict | None) -> tuple[str, bool]:
         args = args or {}
@@ -66,6 +67,10 @@ class ToolHost:
                                        bool(args.get("ignore_case", True)), int(args.get("max_results", 50)))
             if tool == "shell_run":
                 return self._shell_run(str(args.get("command", "")), str(args.get("cwd", "")))
+            if tool == "shell_output":
+                return self._shell_output(args.get("run_id"), int(args.get("offset", 0)))
+            if tool == "shell_stop":
+                return self._shell_stop(args.get("run_id"))
             return (f"unknown tool: {tool}", True)
         except ValueError as e:
             return (str(e), True)
@@ -167,12 +172,25 @@ class ToolHost:
         if not command.strip():
             return ("empty command", True)
         wd = str(self._resolve(cwd)) if cwd.strip() else str(self.roots[0] if self.roots else Path.home())
-        code, output, timed_out = shell.run(command, wd)
-        if timed_out:
-            return ((output or "") + "\n[the command timed out and was killed]", True)
-        if code is None:
-            return (output or "the command could not be started", True)
-        return (output if output else "(no output)", False)
+        job, err = self.jobs.start(command, wd)
+        if job is None:
+            return (err or "the command could not be started", True)
+        job.wait(shell.WAIT)  # not done in time: it keeps running, the reply says so and gives the run_id
+        return shell.render(job, 0)
+
+    def _shell_output(self, run_id, offset: int) -> tuple[str, bool]:
+        job = self.jobs.get(run_id)
+        if job is None:
+            return (f"there is no command with run_id={run_id} (the last {shell.KEEP_JOBS} are kept)", True)
+        return shell.render(job, offset)
+
+    def _shell_stop(self, run_id) -> tuple[str, bool]:
+        job = self.jobs.get(run_id)
+        if job is None:
+            return (f"there is no command with run_id={run_id} (the last {shell.KEEP_JOBS} are kept)", True)
+        if not job.stop():
+            return (f"run_id={run_id} is not running ({shell.render(job, 0, 200)[0].splitlines()[0]})", False)
+        return (f"run_id={run_id} was stopped. Output so far: shell_output with run_id={run_id}.", False)
 
 
 # --- TLS client contexts ---------------------------------------------------

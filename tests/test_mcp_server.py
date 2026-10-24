@@ -36,7 +36,7 @@ print(f"      connection: {time.time()-t0:.2f} s (other tools_server.py processe
 st = states["toolbox"]
 check("server connected", st.status == "ready" and not st.error, st.error)
 names = sorted(t.name for t in st.tools)
-check("22 tools", names == ["calc", "docx_write", "fs_list", "fs_read", "fs_replace", "fs_roots", "fs_search", "image_generate", "memory_delete", "memory_read", "memory_save", "memory_search", "memory_topics", "notes_write", "shell_output", "shell_run", "time_now", "vision_describe", "web_extract", "web_search", "web_search_internet", "xlsx_write"], names)
+check("23 tools", names == ["calc", "docx_write", "fs_list", "fs_read", "fs_replace", "fs_roots", "fs_search", "image_generate", "memory_delete", "memory_read", "memory_save", "memory_search", "memory_topics", "notes_write", "shell_output", "shell_run", "shell_stop", "time_now", "vision_describe", "web_extract", "web_search", "web_search_internet", "xlsx_write"], names)
 by = {t.name: t for t in st.tools}
 check("id = server.tool", by["calc"].id == "toolbox.calc")
 check("annotations: read / write", by["fs_read"].read_only is True and by["notes_write"].read_only is False and by["notes_write"].destructive is True)

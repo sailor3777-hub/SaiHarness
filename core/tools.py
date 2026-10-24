@@ -18,7 +18,7 @@ from core.mcp_manager import ToolInfo
 MAX_RESULT_CHARS = 12_000
 REPEAT_ERROR_BLOCK = 3   # after this many identical errors in a row the tool is no longer called in this reply
 REPEAT_ERROR_KEY = 160   # "the same" error is recognized by the start of its text
-TOOL_TIMEOUTS = {"toolbox.vision_describe": 660.0, "toolbox.shell_run": 90.0, "toolbox.image_generate": 960.0}  # longer than the general call limit: the vision model and ComfyUI take minutes, shell_run has its own 60 s plus a margin
+TOOL_TIMEOUTS = {"toolbox.vision_describe": 660.0, "toolbox.shell_run": 90.0, "toolbox.image_generate": 960.0}  # longer than the general call limit: the vision model and ComfyUI take minutes, shell_run waits up to shell.WAIT (45 s) before leaving the command in the background, plus a margin
 CATALOG_MAX_LISTED = 40   # with more tools the catalog is not listed, search only
 DESCRIPTION_MAX = 110     # description length in a catalog line
 FIND_LIMIT = 6
@@ -37,6 +37,14 @@ META_TOOLS = [
             "tool": {"type": "string"}, "arguments": {"type": "object"}}, "required": ["tool", "arguments"]}}},
 ]
 META_NAMES = {t["function"]["name"] for t in META_TOOLS}
+
+
+def _tool_timeout(tool) -> float:
+    """The call budget of a tool; a host_<name>.<tool> of a remote agent gets the budget of the local tool of the same name."""
+    own = TOOL_TIMEOUTS.get(tool.id)
+    if own is None and tool.server.startswith("host_"):
+        own = TOOL_TIMEOUTS.get(f"toolbox.{tool.name}")
+    return own or 0.0
 
 
 # Tool dependencies: enabling a key pulls in its values (and their dependencies). Empty for now: memory needs no
@@ -322,7 +330,7 @@ class ToolRouter:
             return (ERROR_PREFIX + f"{tool.id} was not called: it has already returned the same error {last[1]} times "
                     f"in a row ({last[0]}). Do not call it again: tell the user what went wrong and why, "
                     "and carry on without this tool.")
-        text, is_error = self.manager.call(tool.server, tool.name, arguments, max(self.call_timeout, TOOL_TIMEOUTS.get(tool.id, 0.0)))
+        text, is_error = self.manager.call(tool.server, tool.name, arguments, max(self.call_timeout, _tool_timeout(tool)))
         if len(text) > MAX_RESULT_CHARS:
             text = text[:MAX_RESULT_CHARS] + f"\n[truncated: showing {MAX_RESULT_CHARS} of {len(text)} characters]"
         if not is_error:

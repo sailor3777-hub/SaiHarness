@@ -42,9 +42,9 @@ llm.httpx.stream = lambda m, u, **k: httpx.Client(transport=httpx.MockTransport(
 w = MainWindow(mcp_config=tmp / "mcp.json"); tp = w.tools_panel; v = w.chat_view; sel = w.selector; ctx = w.context
 check("servers connect in the background", wait(lambda: tp.states and not tp.connect_req.busy, 40) and tp.states["toolbox"].status == "ready", tp.states)
 top = tp.tree.topLevelItem(0)
-check("tree: a server and 22 tools, all off", top.childCount() == 22 and top.checkState(0) == Qt.Unchecked
-      and all(top.child(i).checkState(0) == Qt.Unchecked for i in range(22)) and "toolbox" in top.text(0))
-names = {top.child(i).text(0) for i in range(22)}
+check("tree: a server and 23 tools, all off", top.childCount() == 23 and top.checkState(0) == Qt.Unchecked
+      and all(top.child(i).checkState(0) == Qt.Unchecked for i in range(23)) and "toolbox" in top.text(0))
+names = {top.child(i).text(0) for i in range(23)}
 check("permission tag on a write tool", any(n.startswith("notes_write") and "[asks]" in n for n in names) and "calc" in names, names)
 check("info: no tools enabled", "No tools enabled" in tp.info.text() and tp.prompt_tokens() == 0, tp.info.text())
 
@@ -55,8 +55,8 @@ b.name.setText("p"); b.base_model.setCurrentText("fake-model"); b.max_tokens.set
 
 # enable the whole server BEFORE the chat is created (draft)
 top.setCheckState(0, Qt.Checked)
-check("the server checkbox enables all tools", len(tp.enabled) == 22 and tp.enabled == {t.id for t in tp.tools} and w.chat_id is None)
-check("info: catalog tokens and savings", "Enabled: 22" in tp.info.text() and "Full schemas would take" in tp.info.text() and tp.prompt_tokens() > 0, tp.info.text())
+check("the server checkbox enables all tools", len(tp.enabled) == 23 and tp.enabled == {t.id for t in tp.tools} and w.chat_id is None)
+check("info: catalog tokens and savings", "Enabled: 23" in tp.info.text() and "Full schemas would take" in tp.info.text() and tp.prompt_tokens() > 0, tp.info.text())
 extra_tokens = w.files_panel._extra_tokens
 check("\"whole request\" includes the catalog", extra_tokens >= tp.prompt_tokens() > 0)
 
@@ -128,7 +128,7 @@ lm.script(write(), say("ok")); v.input.setPlainText("and once more"); v.send_btn
 last = [r for r in db.list_messages(w.chat_id) if r["role"] == "tool"][-1]
 check("deny: no question, blocked, no file", asked == [] and "blocked" in last["content"] and not notes.exists(), last["content"])
 check("the policy is saved in the DB and shown in the tree", db.load_tool_policies() == {"toolbox.notes_write": "deny"}
-      and any("[blocked]" in tp.tree.topLevelItem(0).child(i).text(0) for i in range(22)))
+      and any("[blocked]" in tp.tree.topLevelItem(0).child(i).text(0) for i in range(23)))
 tp.set_policy("toolbox.notes_write", None); check("policy reset", db.load_tool_policies() == {} and tp.policy_for(next(t for t in tp.tools if t.name == "notes_write")) == "ask")
 
 # ---------- auto-approve: "ask" runs without the window, "deny" stays blocked ----------
@@ -140,7 +140,7 @@ check("auto-approve: saved in the DB, warning shown", db.get_setting(AUTO_APPROV
 lm.script(write(), say("ok")); v.input.setPlainText("note with auto-approve"); v.send_btn.click(); wait(lambda: w.stream is None, 60)
 check("auto-approve: no question, the file is written", asked == [] and notes.exists() and notes.read_text(encoding="utf-8") == "my note")
 check("auto-approve does not change the stored policy or the tree tag", tp.policy_for(next(t for t in tp.tools if t.name == "notes_write")) == "ask"
-      and any(tp.tree.topLevelItem(0).child(i).text(0).startswith("notes_write") and "[asks]" in tp.tree.topLevelItem(0).child(i).text(0) for i in range(22)))
+      and any(tp.tree.topLevelItem(0).child(i).text(0).startswith("notes_write") and "[asks]" in tp.tree.topLevelItem(0).child(i).text(0) for i in range(23)))
 tp.set_policy("toolbox.notes_write", "deny"); notes.unlink()
 lm.script(write(), say("ok")); v.input.setPlainText("blocked with auto-approve"); v.send_btn.click(); wait(lambda: w.stream is None, 60)
 last = [r for r in db.list_messages(w.chat_id) if r["role"] == "tool"][-1]
@@ -166,7 +166,7 @@ check("without tools: no tools and no catalog in the request", "tools" not in lm
       and w.last_requests[chat2]["tools"] == [])
 for i in range(w.chat_list.list.count()):
     if w.chat_list.list.item(i).data(0x100) != chat2: w.chat_list.list.setCurrentRow(i)
-check("back to the first chat: the tool set is restored", len(tp.enabled) == 21 and "toolbox.time_now" not in tp.enabled
+check("back to the first chat: the tool set is restored", len(tp.enabled) == 22 and "toolbox.time_now" not in tp.enabled
       and tp.tree.topLevelItem(0).checkState(0) == Qt.PartiallyChecked)
 check("chat history with calls is shown after reloading from the DB", "tool search" in v.history.toPlainText() and "◂ toolbox.calc" in v.history.toPlainText())
 
@@ -181,7 +181,7 @@ texts = [tp.tree.topLevelItem(i).text(0) for i in range(tp.tree.topLevelItemCoun
 check("in the tree: working, broken, disabled", any(t.startswith("●") for t in texts) and any(t.startswith("✗ broken") for t in texts) and any(t.startswith("○ off") for t in texts), texts)
 broken = next(tp.tree.topLevelItem(i) for i in range(tp.tree.topLevelItemCount()) if tp.tree.topLevelItem(i).text(0).startswith("✗"))
 check("the broken one shows the error text", broken.childCount() == 1 and broken.child(0).text(0), broken.child(0).text(0))
-check("enabled tools survived the restart", len(tp.enabled) == 21 and len(tp.enabled_tools()) == 21)
+check("enabled tools survived the restart", len(tp.enabled) == 22 and len(tp.enabled_tools()) == 22)
 (tmp / "mcp.json").write_text("{ this is not json", encoding="utf-8"); tp.reconnect_btn.click(); wait(lambda: not tp.connect_req.busy)
 check("broken config: a clear error, the app is alive", "Could not connect the servers" in tp.info.text(), tp.info.text())
 

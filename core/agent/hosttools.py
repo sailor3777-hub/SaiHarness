@@ -31,8 +31,23 @@ TOOL_SPECS: dict[str, dict] = {
     "shell_run": {
         "read_only": False,
         "description": "Runs a shell (PowerShell) command on the remote host {host} ({os}). "
-                       "This executes on another machine; its effects are real and irreversible.",
+                       "This executes on another machine; its effects are real and irreversible. Waits up to "
+                       "45 seconds; a command that is not done by then keeps running in the background (up to "
+                       "1 hour): the reply gives a run_id, follow it with shell_output, stop it with shell_stop.",
         "schema": _schema({"command": _STR, "cwd": _STR}, ["command"]),
+    },
+    "shell_output": {
+        "read_only": True,
+        "description": "Reads the output of a command started by shell_run on the remote host {host} ({os}): "
+                       "run_id from its reply, offset from the hint at the end. Also shows whether the command "
+                       "is still running or its exit code. The command is not run again.",
+        "schema": _schema({"run_id": _INT, "offset": _INT}, ["run_id"]),
+    },
+    "shell_stop": {
+        "read_only": False,
+        "description": "Stops a command started by shell_run on the remote host {host} ({os}) that is still "
+                       "running in the background (kills it and what it started).",
+        "schema": _schema({"run_id": _INT}, ["run_id"]),
     },
     "fs_read": {
         "read_only": True,
