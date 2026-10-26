@@ -87,6 +87,9 @@ check("render carries address/token/name/CA",
 check("render leaves no placeholders", "{{" not in script and "}}" not in script)
 b64 = next((ln.split("'")[1] for ln in script.splitlines() if ln.startswith("$PackageB64")), "")
 check("embedded package decodes to the same zip", base64.b64decode(b64) == pkg)
+check("without winget the installer falls back to the signed python.org installer",
+      "Get-Command winget" in script and "https://www.python.org/ftp/python/" in script
+      and "Get-AuthenticodeSignature" in script and "O=Python Software Foundation" in script)
 
 # --- core.files does not import core.docs at import time -------------------
 proc = subprocess.run([sys.executable, "-c", "import core.files, sys; print('core.docs' in sys.modules)"],

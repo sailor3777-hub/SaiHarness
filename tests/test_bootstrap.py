@@ -63,8 +63,14 @@ for name, data in (("Run.cmd", run), ("Install.cmd", inst)):
     except UnicodeDecodeError: ascii_ok = False
     check(f"{name}: ASCII only (cmd mixes up UTF-8 after chcp 65001), CRLF, no control characters",
           ascii_ok and b"\r\n" in data and data.count(b"\n") == data.count(b"\r\n") and not [b for b in data if b < 9])
-check("Run.cmd starts bootstrap, takes .venv, then py and python, can install Python with winget",
-      b"scripts\\bootstrap.py" in run and b".venv\\Scripts\\python.exe" in run and b":find py -3" in run and b"winget install" in run)
+check("Run.cmd starts bootstrap, takes .venv, then py and python, can install Python",
+      b"scripts\\bootstrap.py" in run and b".venv\\Scripts\\python.exe" in run and b":find py -3" in run
+      and b'-File "%~dp0scripts\\get_python.ps1"' in run and b"Programs\\Python\\Python314\\python.exe" in run)
+getpy = (ROOT / "scripts" / "get_python.ps1").read_bytes()
+check("get_python.ps1: ASCII, winget first, else the python.org installer checked by its signature",
+      getpy.decode("ascii", errors="replace") == getpy.decode("latin-1") and b"winget install" in getpy
+      and b"https://www.python.org/ftp/python/" in getpy and b"Get-AuthenticodeSignature" in getpy
+      and b"O=Python Software Foundation" in getpy)
 check("Install.cmd calls Run.cmd with --no-launch by full path (cmd may not search the current folder)", b'call "%~dp0Run.cmd" --no-launch' in inst)
 help_text = subprocess.run([sys.executable, str(ROOT / "scripts" / "bootstrap.py"), "--help"], capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
 check("bootstrap.py --help works", "--check" in help_text and "--no-launch" in help_text, help_text)

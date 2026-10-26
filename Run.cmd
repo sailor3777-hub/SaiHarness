@@ -7,6 +7,7 @@ if exist ".venv\Scripts\python.exe" set "PY=.venv\Scripts\python.exe"
 if not defined PY call :find py -3
 if not defined PY call :find python
 if not defined PY goto nopython
+:run
 %PY% scripts\bootstrap.py %*
 if errorlevel 1 (
     if /i "%~1"=="--check" exit /b 1
@@ -24,16 +25,16 @@ exit /b 0
 
 :nopython
 echo Python 3.11 or newer was not found.
-where winget >nul 2>&1
-if errorlevel 1 (
-    echo Install Python 3.14 from https://www.python.org/downloads/ ^(tick "Add python.exe to PATH"^) and run this file again.
-    pause
-    exit /b 1
-)
-choice /c YN /m "Install Python 3.14 with winget now"
+choice /c YN /m "Install Python 3.14 now (winget, or python.org when winget is missing)"
 if errorlevel 2 exit /b 1
-winget install -e --id Python.Python.3.14 --scope user
+rem scripts\get_python.ps1: winget install, or the signed installer from python.org
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\get_python.ps1"
+rem a fresh install is not on PATH in this window yet: look in the standard per-user folder
+call :find "%LOCALAPPDATA%\Programs\Python\Python314\python.exe"
+if not defined PY call :find py -3
+if defined PY goto run
 echo.
-echo If the installation succeeded, close this window and run Run.cmd again ^(PATH is refreshed only in a new window^).
+echo Python could not be installed automatically. Install Python 3.14 from https://www.python.org/downloads/
+echo ^(tick "Add python.exe to PATH"^) and run this file again.
 pause
-exit /b 0
+exit /b 1

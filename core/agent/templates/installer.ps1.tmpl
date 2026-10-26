@@ -66,11 +66,36 @@ function Find-Python {
     }
     return $null
 }
+# Install Python for this user: winget when present; otherwise (Windows Server,
+# LTSC, locked-down images) the official installer from python.org, run only if
+# its Authenticode signature is valid and from the Python Software Foundation.
+function Install-Python {
+    $Version = '3.14.7'
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Write-Host "Installing Python $Version via winget..."
+        winget install -e --id Python.Python.3.14 --scope user --accept-source-agreements --accept-package-agreements
+        return
+    }
+    Write-Host "winget not found; downloading Python $Version from python.org..."
+    $ProgressPreference = 'SilentlyContinue'   # the progress bar makes Invoke-WebRequest very slow on PowerShell 5.1
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $Exe = Join-Path $env:TEMP "python-$Version-amd64.exe"
+    Invoke-WebRequest -Uri "https://www.python.org/ftp/python/$Version/python-$Version-amd64.exe" -OutFile $Exe -UseBasicParsing
+    $Sig = Get-AuthenticodeSignature $Exe
+    if ($Sig.Status -ne 'Valid' -or $Sig.SignerCertificate.Subject -notlike '*O=Python Software Foundation*') {
+        Remove-Item $Exe -Force -ErrorAction SilentlyContinue
+        throw "The downloaded Python installer is not signed by the Python Software Foundation ($($Sig.Status)); not running it."
+    }
+    Write-Host "Installing Python $Version (per user, takes a minute)..."
+    $P = Start-Process -FilePath $Exe -ArgumentList '/quiet', 'InstallAllUsers=0', 'PrependPath=1', 'Include_test=0' -Wait -PassThru
+    Remove-Item $Exe -Force -ErrorAction SilentlyContinue
+    if ($P.ExitCode -ne 0) { throw "The Python installer failed with exit code $($P.ExitCode)." }
+}
+
 $Python = Find-Python
 if (-not $Python) {
-    Write-Host "Installing Python 3.14 via winget..."
-    winget install -e --id Python.Python.3.14 --scope user --accept-source-agreements --accept-package-agreements
-    # winget does not update PATH for the current session; refresh it, then retry.
+    Install-Python
+    # A fresh install does not update PATH for the current session; refresh it, then retry.
     $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
     $Python = Find-Python
 }
