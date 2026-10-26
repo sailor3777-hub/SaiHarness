@@ -1,4 +1,4 @@
-"""The Agent tab: create remote agents, see their state, revoke them.
+"""The Agent tab: create remote agents, see their state, revoke or delete them.
 
 Creating an agent makes a one-time enrollment token and writes a per-agent
 ``installer.ps1`` the user runs on the target host. The list shows each agent's
@@ -6,7 +6,7 @@ status (pending / active / revoked) and whether it is connected right now. The
 listener (the bridge) is started/stopped here; while it runs, connected hosts'
 tools appear in the catalog (see ui.tools_panel / core.agent.manager).
 
-Dialog-free logic (``create_agent``, ``revoke``, ``start_listener`` …) is kept
+Dialog-free logic (``create_agent``, ``revoke``, ``delete``, ``start_listener`` …) is kept
 separate from the button handlers so it can be driven headless in tests.
 """
 from __future__ import annotations
@@ -63,9 +63,11 @@ class AgentPanel(QWidget):
 
         self.new_btn = QPushButton("New agent…")
         self.revoke_btn = QPushButton("Revoke")
+        self.delete_btn = QPushButton("Delete")
         btn_row = QHBoxLayout()
         btn_row.addWidget(self.new_btn)
         btn_row.addWidget(self.revoke_btn)
+        btn_row.addWidget(self.delete_btn)
         btn_row.addStretch(1)
 
         layout = QVBoxLayout(self)
@@ -77,6 +79,7 @@ class AgentPanel(QWidget):
         self.listen_btn.clicked.connect(self._toggle_listener)
         self.new_btn.clicked.connect(self._new_agent)
         self.revoke_btn.clicked.connect(self._revoke_selected)
+        self.delete_btn.clicked.connect(self._delete_selected)
         self.address.editingFinished.connect(lambda: db.set_setting(ADDRESS_KEY, self.address.text().strip()))
         self.port.editingFinished.connect(lambda: db.set_setting(PORT_KEY, self.port.text().strip()))
         themes.bus.changed.connect(lambda _t: self._render_status())
@@ -120,6 +123,16 @@ class AgentPanel(QWidget):
     def revoke(self, agent_id: int) -> bool:
         with closing(self._registry()) as reg:
             done = reg.revoke(agent_id)
+        self.refresh()
+        return done
+
+    def delete(self, agent_id: int) -> bool:
+        """Remove the agent's record and drop its live connection; the name becomes free again."""
+        with closing(self._registry()) as reg:
+            row = reg.get(agent_id)
+            done = reg.delete(agent_id)
+        if done and self.agent is not None:
+            self.agent.disconnect(row["name"])
         self.refresh()
         return done
 
@@ -203,6 +216,16 @@ class AgentPanel(QWidget):
         if QMessageBox.question(self, "Revoke agent",
                                 f"Revoke \"{name}\"? Its certificate will stop being accepted.") == QMessageBox.Yes:
             self.revoke(item.data(0, ID_ROLE))
+
+    def _delete_selected(self):
+        item = self.tree.currentItem()
+        if item is None:
+            return
+        name = item.text(0)
+        if QMessageBox.question(self, "Delete agent",
+                                f"Delete \"{name}\"? It is disconnected and removed from the list; "
+                                "the host must be reinstalled to connect again.") == QMessageBox.Yes:
+            self.delete(item.data(0, ID_ROLE))
 
     def showEvent(self, event):
         super().showEvent(event)

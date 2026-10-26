@@ -1,5 +1,5 @@
 """Offscreen test for ui.agent_panel.AgentPanel: create an agent (writes the
-installer, records a pending agent), list it, start/stop the listener, revoke.
+installer, records a pending agent), list it, start/stop the listener, revoke, delete.
 Runs on the offscreen Qt platform; no real network beyond a loopback bind."""
 import sqlite3
 import sys
@@ -81,6 +81,14 @@ check("revoke blocks the agent", panel.revoke(agent_id))
 with sqlite3.connect(db.DB_PATH) as conn:
     check("registry shows the agent revoked", Registry(conn).get(agent_id)["status"] == "revoked")
 check("re-creating a revoked name is refused", raises(RegistryInputError, lambda: panel.create_agent("alpha", out)))
+
+check("delete removes the agent", panel.delete(agent_id))
+with sqlite3.connect(db.DB_PATH) as conn:
+    check("registry no longer has the agent", Registry(conn).get(agent_id) is None)
+check("the deleted agent is gone from the list",
+      [panel.tree.topLevelItem(i).text(0) for i in range(panel.tree.topLevelItemCount())] == ["beta"])
+check("a deleted name can be created again", bool(panel.create_agent("alpha", out)))
+check("deleting a missing agent is a no-op", not panel.delete(agent_id))
 
 agent_mgr.shutdown()
 print("\nALL OK" if ok_all else "\nSOME FAILED")

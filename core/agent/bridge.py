@@ -101,6 +101,17 @@ class Bridge:
             await self._server.wait_closed()
             self._server = None
 
+    async def disconnect(self, name: str) -> bool:
+        """Close a connected agent's socket (after it was deleted). True if it was connected."""
+        agent = self._connected.get(name)
+        if agent is None:
+            return False
+        try:
+            await agent.ws.close(CLOSE_NOT_ADMITTED, "removed")
+        except Exception:
+            pass
+        return True
+
     def port(self) -> int:
         return self._server.sockets[0].getsockname()[1]
 

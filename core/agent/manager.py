@@ -83,6 +83,15 @@ class AgentManager:
         self._run(self._bridge.stop(), 15)
         self._running = False
 
+    def disconnect(self, name: str) -> bool:
+        """Drop a connected agent's socket. True if it was connected."""
+        if self._loop is None or not self._running:
+            return False
+        try:
+            return self._run(self._bridge.disconnect(name), 5)
+        except Exception:
+            return False
+
     def shutdown(self):
         if self._loop is None:
             return

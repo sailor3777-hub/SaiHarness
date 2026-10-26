@@ -95,6 +95,12 @@ async def main(db_path: str):
         res5 = await bridge.call("alpha", "fs_read", {"path": str(tmp / "ca_cert.pem")})
         check("a path outside the roots is refused", res5["is_error"])
 
+        # deleting the agent closes its live connection
+        check("disconnect drops a connected agent",
+              await bridge.disconnect("alpha")
+              and await wait_until(lambda: "alpha" not in bridge.connected_names(), 5))
+        check("disconnecting an unknown agent is a no-op", not await bridge.disconnect("nobody"))
+
         # disconnect
         task.cancel()
         try:
