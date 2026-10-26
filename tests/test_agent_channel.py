@@ -91,9 +91,10 @@ async def main(db_path: str):
         res4 = await bridge.call("alpha", "shell_run", {"command": "echo channel-ok"})
         check("shell_run runs on the host", "channel-ok" in res4["output"] and not res4["is_error"])
 
-        # a read outside the allowed roots is refused by the host tool layer
+        # paths are not restricted: a file outside the start folders is readable
         res5 = await bridge.call("alpha", "fs_read", {"path": str(tmp / "ca_cert.pem")})
-        check("a path outside the roots is refused", res5["is_error"])
+        check("a path outside the start folders is readable",
+              "BEGIN CERTIFICATE" in res5["output"] and not res5["is_error"])
 
         # deleting the agent closes its live connection
         check("disconnect drops a connected agent",

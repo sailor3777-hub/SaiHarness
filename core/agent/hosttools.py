@@ -57,7 +57,7 @@ TOOL_SPECS: dict[str, dict] = {
     },
     "fs_list": {
         "read_only": True,
-        "description": "Lists a folder on the remote host {host} ({os}). Without path: the allowed folders.",
+        "description": "Lists a folder on the remote host {host} ({os}). Any folder on the host; without path: its start folders (or the drives).",
         "schema": _schema({"path": _STR}, []),
     },
     "fs_search": {

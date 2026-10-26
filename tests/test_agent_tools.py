@@ -168,10 +168,11 @@ def main(db_path: str):
                                            "arguments": {"path": str(work / "absent.txt")}})
         check("a missing file comes back as an error", markers.is_error(out4))
 
-        # path outside the host's roots is refused by the host, surfaced as an error
+        # paths are not restricted: a file outside the host's start folders is read
         out5 = router.handle("call_tool", {"tool": "host_alpha.fs_read",
                                            "arguments": {"path": str(ca_cert_path)}})
-        check("a path outside the host roots is an error", markers.is_error(out5))
+        check("a path outside the host start folders is readable",
+              not markers.is_error(out5) and "BEGIN CERTIFICATE" in out5, out5[:200])
 
         # --- composite manager (host tools + an MCP-style base) ---
         fake = FakeMcp()

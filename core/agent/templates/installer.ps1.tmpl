@@ -25,7 +25,8 @@ New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 # Pinned CA: the agent trusts only this authority and talks to no one else.
 Set-Content -Path (Join-Path $InstallDir 'ca_cert.pem') -Value $CaCert -Encoding ascii
 
-# Config. Edit "roots" to the folders this agent may touch on this host.
+# Config. "roots" are only start folders (relative paths, default cwd and search);
+# the agent may touch any folder this account can reach.
 $Config = [ordered]@{
     name    = $AgentName
     address = $MainAddress

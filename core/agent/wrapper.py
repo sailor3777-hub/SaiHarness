@@ -5,8 +5,10 @@ wrapper dials out over CA-pinned TLS and executes the tool calls it receives.
 
 ``ToolHost`` is the host-side tool layer. It reuses the existing local logic --
 ``core.shell`` for shell_run and ``core.files`` for reading/searching -- so
-remote behaviour matches the local tools. Allowed roots are configured on the
-host (the installer / UI sets them in Phase 4); here they are passed in.
+remote behaviour matches the local tools. Paths are not restricted: the agent
+may touch any folder the account it runs under can reach. The configured roots
+are only start folders (the base for relative paths, the default shell cwd and
+fs_search scope, what fs_list shows without a path).
 
 Two client entry points:
 
@@ -45,7 +47,7 @@ class EnrollmentFailed(RuntimeError):
 # --- host-side tool layer --------------------------------------------------
 
 class ToolHost:
-    """Runs tools locally within configured root folders. Returns (output, is_error)."""
+    """Runs tools locally, anywhere on the host. Returns (output, is_error)."""
 
     def __init__(self, roots):
         self.roots = [Path(r).resolve() for r in roots if Path(r).is_dir()]
@@ -78,20 +80,12 @@ class ToolHost:
             return (f"{e.__class__.__name__}: {e}", True)
 
     # path helpers
-    def _first_root(self) -> Path:
-        if not self.roots:
-            raise ValueError("no allowed folders are configured on this host")
-        return self.roots[0]
-
-    def _within(self, p: Path) -> bool:
-        return any(p == r or r in p.parents for r in self.roots)
+    def _base(self) -> Path:
+        return self.roots[0] if self.roots else Path.home()
 
     def _resolve(self, path: str) -> Path:
         p = Path((path or "").strip() or ".").expanduser()
-        rp = p.resolve() if p.is_absolute() else (self._first_root() / p).resolve()
-        if not self._within(rp):
-            raise ValueError(f"path outside the allowed folders: {path}")
-        return rp
+        return p.resolve() if p.is_absolute() else (self._base() / p).resolve()
 
     # tools
     def _fs_read(self, path: str, max_chars: int, offset: int) -> tuple[str, bool]:
@@ -113,9 +107,10 @@ class ToolHost:
 
     def _fs_list(self, path: str) -> tuple[str, bool]:
         if not path.strip():
-            if not self.roots:
-                return ("no allowed folders are configured on this host", True)
-            return ("\n".join(f"{r.name}/  {r}" for r in self.roots), False)
+            if self.roots:
+                return ("\n".join(f"{r.name}/  {r}" for r in self.roots), False)
+            drives = [f"{d}:\\" for d in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if os.path.isdir(f"{d}:\\")]
+            return ("\n".join(drives) if drives else str(Path.home()), False)
         p = self._resolve(path)
         if not p.exists():
             return (f"folder not found: {path}", True)
@@ -144,7 +139,7 @@ class ToolHost:
             return (f"bad regular expression: {e}", True)
         targets = [self._resolve(path)] if path.strip() else list(self.roots)
         if not targets:
-            return ("no allowed folders are configured on this host", True)
+            return ("give a path to search in (no start folders are configured on this host)", True)
         results: list[str] = []
         cap = max(1, min(int(max_results), 500))
         for target in targets:
@@ -171,7 +166,7 @@ class ToolHost:
     def _shell_run(self, command: str, cwd: str) -> tuple[str, bool]:
         if not command.strip():
             return ("empty command", True)
-        wd = str(self._resolve(cwd)) if cwd.strip() else str(self.roots[0] if self.roots else Path.home())
+        wd = str(self._resolve(cwd)) if cwd.strip() else str(self._base())
         job, err = self.jobs.start(command, wd)
         if job is None:
             return (err or "the command could not be started", True)
