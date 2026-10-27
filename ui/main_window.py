@@ -3,7 +3,7 @@ import time
 from contextlib import closing
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QMainWindow, QSplitter
 
 from core import db, images, llm, memory, vision
@@ -28,6 +28,19 @@ def _fmt(n: int) -> str:
     return f"{n:,}".replace(",", " ")
 LIMIT_TTL = 20.0  # how often to re-check with the server how much context the loaded model has
 LOCK_NOTE = "The model is locked to this chat: it is not changed after the first message."
+SPLITTER_KEY = "splitter_sizes"  # app_settings: panel widths [chats, dialog, context] as JSON
+DEFAULT_SIZES = [240, 760, 400]
+PANEL_MIN_WIDTH = 120
+
+
+def _saved_sizes() -> list[int] | None:
+    try:
+        sizes = json.loads(db.get_setting(SPLITTER_KEY) or "null")
+    except ValueError:
+        return None
+    if isinstance(sizes, list) and len(sizes) == 3 and all(isinstance(s, int) and s > 0 for s in sizes):
+        return sizes
+    return None
 
 
 class MainWindow(QMainWindow):
@@ -42,8 +55,18 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.chat_list)
         splitter.addWidget(self.chat_view)
         splitter.addWidget(self.context)
-        splitter.setSizes([240, 760, 400])
+        splitter.setChildrenCollapsible(False)  # a panel can be made narrow, but never disappears by accident
+        splitter.setHandleWidth(6)
+        for panel in (self.chat_list, self.chat_view, self.context):
+            panel.setMinimumWidth(PANEL_MIN_WIDTH)
+        splitter.setSizes(_saved_sizes() or DEFAULT_SIZES)
         splitter.setStretchFactor(1, 1)
+        self._save_sizes_timer = QTimer(self)  # a drag moves the handle many times: save once it stops
+        self._save_sizes_timer.setSingleShot(True)
+        self._save_sizes_timer.setInterval(400)
+        self._save_sizes_timer.timeout.connect(lambda: db.set_setting(SPLITTER_KEY, json.dumps(splitter.sizes())))
+        splitter.splitterMoved.connect(lambda *_: self._save_sizes_timer.start())
+        self.splitter = splitter
         self.setCentralWidget(splitter)
 
         self.chat_id: int | None = None
