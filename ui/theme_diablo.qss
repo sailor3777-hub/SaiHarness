@@ -35,5 +35,9 @@ QLabel#status { color: #8a7650; }
 QLabel#title { font-weight: bold; color: #d4a840; padding: 4px; }
 QScrollBar:vertical { width: 12px; background-color: #130a07; }
 QScrollBar::handle:vertical { background: #5c1a1a; border: 1px solid #8a6a2a; min-height: 24px; }
+QScrollBar:horizontal { height: 12px; background-color: #130a07; }
+QScrollBar::handle:horizontal { background: #5c1a1a; border: 1px solid #8a6a2a; min-width: 24px; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: none; }
 QToolTip { background-color: #1a0a08; color: #f0d890; border: 1px solid #d4a840; }
 QMessageBox, QDialog { background-color: #0b0605; }

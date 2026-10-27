@@ -83,11 +83,16 @@ class WebPanel(QWidget):
         searx_row.addWidget(self.searx_url, 1)
         searx_row.addWidget(self.searx_check)
 
+        searx_title = QLabel("SearXNG: internet search (the web_search_internet tool)")
+        searx_title.setWordWrap(True)  # long captions must wrap, or the right panel cannot be made narrower
+        sites_title = QLabel("Sites to search (the index is stored locally; web_search searches only in it)")
+        sites_title.setWordWrap(True)
+
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("SearXNG: internet search (the web_search_internet tool)"))
+        layout.addWidget(searx_title)
         layout.addLayout(searx_row)
         layout.addWidget(self.searx_status)
-        layout.addWidget(QLabel("Sites to search (the index is stored locally; web_search searches only in it)"))
+        layout.addWidget(sites_title)
         layout.addWidget(self.url)
         layout.addLayout(opts)
         layout.addWidget(self.add_btn)

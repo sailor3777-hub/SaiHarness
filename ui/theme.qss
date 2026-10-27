@@ -20,3 +20,7 @@ QLabel#status { color: #8a8a8a; }
 QLabel#title { font-weight: bold; color: #aaaaaa; padding: 4px; }
 QScrollBar:vertical { width: 10px; }
 QScrollBar::handle:vertical { background: #333333; min-height: 24px; }
+QScrollBar:horizontal { height: 10px; }
+QScrollBar::handle:horizontal { background: #333333; min-width: 24px; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: none; }

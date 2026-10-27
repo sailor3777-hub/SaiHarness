@@ -4,7 +4,7 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QTabWidget, QLabel, QPlainTextEdit,
     QFormLayout, QDoubleSpinBox, QSpinBox, QLineEdit, QComboBox, QPushButton,
-    QHBoxLayout, QMessageBox,
+    QHBoxLayout, QMessageBox, QScrollArea, QFrame,
 )
 
 from core import db
@@ -272,13 +272,40 @@ class ModelSelector(QWidget):
         )
 
 
+class _Tabs(QTabWidget):
+    """Tabs whose pages sit in scroll areas: the panel can be made as narrow as the user wants,
+    a page wider than the panel gets a scroll bar instead of holding the splitter."""
+
+    def __init__(self):
+        super().__init__()
+        self.setUsesScrollButtons(True)  # the tab bar scrolls instead of setting the minimum width
+
+    def addTab(self, page: QWidget, label: str) -> int:
+        area = QScrollArea()
+        area.setWidget(page)
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.NoFrame)
+        area.setMinimumWidth(0)
+        return super().addTab(area, label)
+
+    def page(self, index: int) -> QWidget:
+        return self.widget(index).widget()
+
+    def show_page(self, page: QWidget):
+        for i in range(self.count()):
+            if self.page(i) is page:
+                self.setCurrentIndex(i)
+                return
+
+
 class ContextPanel(QWidget):
     def __init__(self, mcp_config: Path | None = None, connect_mcp: bool = True):
         super().__init__()
         layout = QVBoxLayout(self)
         title = QLabel("Context")
         title.setObjectName("title")
-        tabs = QTabWidget()
+        tabs = _Tabs()
+        self.tabs = tabs
 
         self.files_panel = FilesPanel()
         tabs.addTab(self.files_panel, "Files")
@@ -317,7 +344,7 @@ class ContextPanel(QWidget):
 
         def edit(profile):
             self.builder.load(profile)
-            tabs.setCurrentWidget(self.builder)
+            tabs.show_page(self.builder)
 
         self.model_selector.edit_requested.connect(edit)
 

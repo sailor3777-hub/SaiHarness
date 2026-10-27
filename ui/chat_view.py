@@ -8,6 +8,7 @@ from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap, QTextBlockFormat, QTextCursor, QTextDocument
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QPlainTextEdit, QPushButton, QLabel, QCheckBox, QFileDialog,
+    QSizePolicy,
 )
 
 from core import imagegen, images, markers
@@ -54,6 +55,37 @@ class _Input(QPlainTextEdit):
         super().keyPressEvent(e)
 
 
+class _ElidedLabel(QLabel):
+    """One-line status that never sets the panel's width: a long text is drawn cut with "…", the whole text is in the
+    tooltip and in text(). Without this a long "Tool: …" status widened the dialog panel during generation."""
+
+    def __init__(self, text: str = ""):
+        super().__init__()
+        self._full = ""
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)  # the layout does not ask the text's width
+        self.setMinimumWidth(1)
+        self.setText(text)
+
+    def text(self) -> str:
+        return self._full
+
+    def setText(self, text: str):
+        self._full = text
+        self.setToolTip(text)
+        self._show()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._show()
+
+    def _show(self):
+        width = self.contentsRect().width()
+        shown = self.fontMetrics().elidedText(self._full.replace("\n", " "), Qt.ElideRight, width) \
+            if width > 1 else self._full
+        if shown != super().text():
+            super().setText(shown)
+
+
 def _text_html(text: str) -> str:
     return escape(text).replace("\n", "<br>")
 
@@ -75,7 +107,7 @@ class ChatView(QWidget):
         self._stick_bottom = False
 
         layout = QVBoxLayout(self)
-        self.title = QLabel("Dialog")
+        self.title = _ElidedLabel("Dialog")  # a long chat title is cut with "…", it does not widen the dialog panel
         self.title.setObjectName("title")
         self.show_reasoning = QCheckBox("Reasoning")
         self.show_reasoning.setChecked(True)
@@ -92,7 +124,7 @@ class ChatView(QWidget):
         self.input = _Input()
         self.input.setPlaceholderText("Message... (Enter to send, Shift+Enter for a new line)")
         self.input.setFixedHeight(90)
-        self.status = QLabel("")
+        self.status = _ElidedLabel("")
         self.status.setObjectName("status")
         self.attach_btn = QPushButton("📎")
         self.attach_btn.setToolTip("Attach an image (you can also paste with Ctrl+V or drag it into the input field)")

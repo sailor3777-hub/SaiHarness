@@ -78,6 +78,9 @@ class ToolsPanel(QWidget):
         self.info.setWordWrap(True)
         self.info.setObjectName("status")
         self.vision_combo = QComboBox()
+        # a long profile name must not set the width of the whole right panel
+        self.vision_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.vision_combo.setMinimumContentsLength(8)
         self.vision_combo.setToolTip("A model with image support that the vision_describe tool calls.\n"
                                      "Profile: its connection, model, temperature and token limit are used.\n"
                                      "Manual: the LM Studio server address, key and model name are entered here.")
