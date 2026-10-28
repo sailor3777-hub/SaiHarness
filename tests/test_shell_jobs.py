@@ -18,6 +18,10 @@ jobs = shell.Jobs()
 job, err = jobs.start("'one'; Start-Sleep 3; 'two'", str(root))
 check("a job starts", job is not None and not err, err)
 check("wait times out while the command is running", job.wait(0.5) is False and job.state == "running")
+# PowerShell may take more than 0.5 s to print anything on a slow machine: wait for the first line
+t0 = time.time()
+while "one" not in job.snapshot()["text"] and time.time() - t0 < 2.5:
+    time.sleep(0.05)
 text, is_err = shell.render(job, 0)
 check("render of a running job says so, with run_id and a way to follow it",
       "still running" in text and f"run_id={job.id}" in text and "shell_stop" in text and "one" in text and not is_err, text)
@@ -94,6 +98,6 @@ out, err = host.run("shell_run", {"command": "Start-Sleep 20"})
 out, err = host.run("shell_stop", {"run_id": 2}); check("host shell_stop", not err and "was stopped" in out, out)
 out, err = host.run("shell_output", {"run_id": 99}); check("host: unknown run_id is an error", err, out)
 out, err = host.run("shell_run", {"command": "'quick'"}); check("host: a quick command returns at once with its exit code", not err and "exit code 0" in out and "quick" in out, out)
-out, err = host.run("shell_run", {"command": "x", "cwd": str(tmp)}); check("host: cwd outside the roots is still refused", err and "outside" in out, out)
+out, err = host.run("shell_run", {"command": "'outer'", "cwd": str(tmp)}); check("host: cwd outside the roots is allowed (no folder restriction on hosts)", not err and "outer" in out and str(tmp) in out, out)
 
 print("ALL OK" if ok_all else "SOME FAILED")
