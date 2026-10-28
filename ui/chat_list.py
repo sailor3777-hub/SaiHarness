@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QMenu, QInputDialog, QMessageBox, QComboBox,
 )
 
-from core import db
+from core import about, db
 from ui import themes
 
 
@@ -32,6 +32,10 @@ class ChatList(QWidget):
         layout.addWidget(self.theme_box)
         layout.addWidget(self.new_btn)
         layout.addWidget(self.list)
+        author = QLabel(about.SHORT)
+        author.setObjectName("status")
+        author.setToolTip(about.COPYRIGHT)
+        layout.addWidget(author)
 
         self.new_btn.clicked.connect(self.new_requested)
         self.theme_box.activated.connect(lambda i: self.theme_requested.emit(self.theme_box.itemData(i)))

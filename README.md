@@ -1,5 +1,7 @@
 # SaiHarness
 
+Copyright (c) 2026 Uncle Sai ([github.com/sailor3777-hub](https://github.com/sailor3777-hub)). All rights reserved.
+
 This is the `en` branch: the interface, model prompts and tool descriptions are in English. The `main` branch is the Russian version.
 
 A Windows desktop agent harness for local LLMs, built with PySide6. It talks to any OpenAI-compatible server (LM Studio by default, `http://localhost:1234`) and gives the model controlled access to tools: files, shell, web, Office documents, images, memory and MCP servers.
