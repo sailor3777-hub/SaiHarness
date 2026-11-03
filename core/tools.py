@@ -52,6 +52,28 @@ def _tool_timeout(tool) -> float:
 REQUIRES: dict[str, tuple[str, ...]] = {}
 
 
+# The tools a new chat starts with (ids "server.name"). Existing chats keep their own stored set.
+DEFAULT_CHAT_TOOLS: tuple[str, ...] = ("toolbox.memory_search", "toolbox.memory_topics", "toolbox.memory_read")
+
+# Tool groups for the Tools tab, by tool name. A UI grouping only: registration and execution do not use it.
+# A tool not listed here goes to OTHER_GROUP.
+TOOL_GROUPS: dict[str, tuple[str, ...]] = {
+    "Files": ("fs_roots", "fs_list", "fs_read", "fs_search", "fs_replace"),
+    "Memory": ("memory_search", "memory_topics", "memory_read", "memory_save", "memory_delete"),
+    "Web": ("web_search", "web_search_internet", "web_extract"),
+    "Shell": ("shell_run", "shell_output", "shell_stop"),
+    "Office documents": ("docx_write", "xlsx_write"),
+    "Images": ("vision_describe", "image_generate"),
+    "Utilities": ("calc", "time_now", "notes_write"),
+}
+OTHER_GROUP = "Other"
+_GROUP_OF = {name: group for group, names in TOOL_GROUPS.items() for name in names}
+
+
+def tool_group(tool: ToolInfo) -> str:
+    return _GROUP_OF.get(tool.name, OTHER_GROUP)
+
+
 def with_requirements(tool_ids, requires: dict[str, tuple[str, ...]] | None = None) -> set[str]:
     """The set of tools together with what they require (transitively; cycles are fine)."""
     requires = REQUIRES if requires is None else requires

@@ -40,12 +40,13 @@ lm = LM(); llm.httpx.stream = lambda m, u, **k: httpx.Client(transport=httpx.Moc
 asked = []
 def answer(result):
     return staticmethod(lambda p, t, text, *a, **k: (asked.append(text), result)[1])
+from ui.tools_panel import _walk
 w = MainWindow(mcp_config=tmp / "mcp.json"); tp = w.tools_panel; v = w.chat_view; ctx = w.context
 wait(lambda: tp.states and not tp.connect_req.busy, 40)
 c = ctx.connections; c.name.setText("lm"); c.url.setText("127.0.0.1:1"); c.save_btn.click(); wait(lambda: not ctx.builder.models_req.busy)
 b = ctx.builder; b.name.setText("p"); b.base_model.setCurrentText("fake"); b.save_btn.click()
 tp.tree.topLevelItem(0).setCheckState(0, Qt.Checked)
-check("fs_replace is in the catalog and \"asks\" by default", any(t.name == "fs_replace" and tp.policy_for(t) == "ask" for t in tp.tools) and any("fs_replace" in tp.tree.topLevelItem(0).child(i).text(0) and "[asks]" in tp.tree.topLevelItem(0).child(i).text(0) for i in range(tp.tree.topLevelItem(0).childCount())))
+check("fs_replace is in the catalog and \"asks\" by default", any(t.name == "fs_replace" and tp.policy_for(t) == "ask" for t in tp.tools) and any("fs_replace" in c.text(0) and "[asks]" in c.text(0) for c in _walk(tp.tree.topLevelItem(0))))
 call = lambda: [tc("r1", "call_tool", {"tool": "toolbox.fs_replace", "arguments": {"path": "KeyboardEscape/requirements.txt", "old": "yellow sausage", "new": "brown bear"}})]
 def baks(): return sorted(x.name for x in req.parent.iterdir() if ".bak" in x.name)
 

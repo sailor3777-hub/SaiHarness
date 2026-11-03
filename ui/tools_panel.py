@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 
@@ -12,12 +13,14 @@ from core import imagegen, vision
 from core.connection import normalize_url
 from core.vision import VISION_PROFILE_KEY
 from core.mcp_manager import McpManager, ServerState, ToolInfo, load_config
-from core.tools import Catalog, default_policy, meta_tools_tokens, schema_tokens, with_requirements
+from core.tools import (DEFAULT_CHAT_TOOLS, TOOL_GROUPS, OTHER_GROUP, Catalog, default_policy, meta_tools_tokens,
+                         schema_tokens, tool_group, with_requirements)
 from core.files import estimate_tokens
 from ui import themes
 from worker import AsyncCall
 
-ID_ROLE, KIND_ROLE = Qt.UserRole, Qt.UserRole + 1  # KIND: 'server' | 'tool' | 'note'
+ID_ROLE, KIND_ROLE = Qt.UserRole, Qt.UserRole + 1  # KIND: 'server' | 'group' | 'tool' | 'note'
+log = logging.getLogger(__name__)
 
 
 def _dim() -> QBrush:
@@ -33,6 +36,19 @@ POLICY_NAMES = {"auto": "Run without asking", "ask": "Ask for confirmation", "de
 CHECK = {True: Qt.Checked, False: Qt.Unchecked}
 AUTO_APPROVE_KEY = "auto_approve"  # app_settings: "1" = calls that ask for confirmation run without the window
 AUTO_APPROVE_WARNING = "Auto-approve is on: write tools, shell_run and web_extract run without asking."
+
+
+def _walk(item: QTreeWidgetItem):
+    """All items below item (depth first)."""
+    for i in range(item.childCount()):
+        child = item.child(i)
+        yield child
+        yield from _walk(child)
+
+
+def _leaf_ids(item: QTreeWidgetItem) -> list[str]:
+    """ids of the tools below a server or group item."""
+    return [it.data(0, ID_ROLE) for it in _walk(item) if it.data(0, KIND_ROLE) == "tool"]
 
 
 class ToolsPanel(QWidget):
@@ -262,6 +278,22 @@ class ToolsPanel(QWidget):
         self._sync()
         self._render()
 
+    def default_tool_ids(self) -> set[str]:
+        """The tool set a new chat starts with: DEFAULT_CHAT_TOOLS minus the tools the connected servers do not have.
+
+        Before the servers are connected the registry is unknown, so the whole set is kept
+        (an unavailable id is ignored by enabled_tools anyway).
+        """
+        if not self.states:
+            return set(DEFAULT_CHAT_TOOLS)
+        known = {t.id for t in self.tools}
+        missing = [t for t in DEFAULT_CHAT_TOOLS if t not in known]
+        if missing:
+            log.warning("default chat tools not found and skipped: %s", ", ".join(missing))
+            from core import diag
+            diag.note(f"warning: default chat tools not found and skipped: {', '.join(missing)}")
+        return {t for t in DEFAULT_CHAT_TOOLS if t in known}
+
     def enabled_tools(self) -> list[ToolInfo]:
         """Enabled tools that are actually available right now (the server is connected).
 
@@ -297,8 +329,8 @@ class ToolsPanel(QWidget):
         checked = item.checkState(0) == Qt.Checked
         if kind == "tool":
             (self.enabled.add if checked else self.enabled.discard)(ident)
-        elif kind == "server":
-            ids = {t.id for t in self.tools if t.server == ident}
+        elif kind in ("server", "group"):
+            ids = set(_leaf_ids(item))
             self.enabled = (self.enabled | ids) if checked else (self.enabled - ids)
         else:
             return
@@ -338,8 +370,7 @@ class ToolsPanel(QWidget):
     # --- tree ---
 
     def _rebuild(self):
-        expanded = {self.tree.topLevelItem(i).data(0, ID_ROLE) for i in range(self.tree.topLevelItemCount())
-                    if self.tree.topLevelItem(i).isExpanded()}
+        expanded = {it.data(0, ID_ROLE) for it in _walk(self.tree.invisibleRootItem()) if it.isExpanded()}
         first = self.tree.topLevelItemCount() == 0
         self._updating = True
         self.tree.clear()
@@ -351,14 +382,21 @@ class ToolsPanel(QWidget):
                 top.setText(0, f"● {name} — tools: {len(state.tools)}")
                 top.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
                 top.setCheckState(0, Qt.Unchecked)
+                groups: dict[str, list[ToolInfo]] = {}
                 for t in state.tools:
-                    child = QTreeWidgetItem(top, [t.name + POLICY_TAGS[self.policy_for(t)]])
-                    child.setData(0, ID_ROLE, t.id)
-                    child.setData(0, KIND_ROLE, "tool")
-                    child.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
-                    child.setCheckState(0, Qt.Unchecked)
-                    child.setToolTip(0, f"{t.description}\n\nPermissions: {POLICY_NAMES[self.policy_for(t)]}\n"
-                                        "Right-click: change permissions.")
+                    groups.setdefault(tool_group(t), []).append(t)
+                order = [g for g in (*TOOL_GROUPS, OTHER_GROUP) if g in groups]
+                if len(order) == 1:  # a server with one kind of tools: no extra level
+                    self._add_tools(top, groups[order[0]])
+                for group in order if len(order) > 1 else ():
+                    item = QTreeWidgetItem(top)
+                    item.setData(0, ID_ROLE, f"{name}/{group}")
+                    item.setData(0, KIND_ROLE, "group")
+                    item.setText(0, f"{group} ({len(groups[group])})")
+                    item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+                    item.setCheckState(0, Qt.Unchecked)
+                    self._add_tools(item, groups[group])
+                    item.setExpanded(f"{name}/{group}" in expanded)
             elif state.status == "disabled":
                 top.setText(0, f"○ {name} — disabled in the config")
                 top.setFlags(Qt.ItemIsEnabled)
@@ -378,22 +416,38 @@ class ToolsPanel(QWidget):
         self._sync()
         self._render()
 
+    def _add_tools(self, parent: QTreeWidgetItem, tools: list[ToolInfo]):
+        for t in tools:
+            child = QTreeWidgetItem(parent, [t.name + POLICY_TAGS[self.policy_for(t)]])
+            child.setData(0, ID_ROLE, t.id)
+            child.setData(0, KIND_ROLE, "tool")
+            child.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+            child.setCheckState(0, Qt.Unchecked)
+            child.setToolTip(0, f"{t.description}\n\nPermissions: {POLICY_NAMES[self.policy_for(t)]}\n"
+                                "Right-click: change permissions.")
+
     def _sync(self):
         self._updating = True
         wanted = with_requirements(self.enabled)  # dependencies of enabled tools are checked even if they were not chosen
+
+        def sync(item: QTreeWidgetItem) -> tuple[int, int]:
+            """Sets the check marks below item and on item itself; returns (enabled, total) tools."""
+            if item.data(0, KIND_ROLE) == "tool":
+                state = item.data(0, ID_ROLE) in wanted
+                item.setCheckState(0, CHECK[state])
+                return int(state), 1
+            on = total = 0
+            for j in range(item.childCount()):
+                a, b = sync(item.child(j))
+                on, total = on + a, total + b
+            item.setCheckState(0, Qt.Checked if total and on == total else Qt.PartiallyChecked if on else Qt.Unchecked)
+            return on, total
+
         try:
             for i in range(self.tree.topLevelItemCount()):
                 top = self.tree.topLevelItem(i)
-                if not (top.flags() & Qt.ItemIsUserCheckable):
-                    continue
-                on = 0
-                for j in range(top.childCount()):
-                    child = top.child(j)
-                    state = child.data(0, ID_ROLE) in wanted
-                    child.setCheckState(0, CHECK[state])
-                    on += state
-                total = top.childCount()
-                top.setCheckState(0, Qt.Checked if total and on == total else Qt.PartiallyChecked if on else Qt.Unchecked)
+                if top.flags() & Qt.ItemIsUserCheckable:
+                    sync(top)
         finally:
             self._updating = False
 

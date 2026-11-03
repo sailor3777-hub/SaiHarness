@@ -7,7 +7,7 @@ tmp = pathlib.Path(tempfile.mkdtemp()); db.DB_PATH = tmp / "t23.db"
 from ui.main_window import MainWindow
 from ui.permission import PermissionBroker
 from ui.tools_panel import ID_ROLE, KIND_ROLE
-from core.tools import META_TOOLS
+from core.tools import DEFAULT_CHAT_TOOLS, META_TOOLS, TOOL_GROUPS
 
 ok_all = True
 def check(name, cond, extra=""):
@@ -42,11 +42,38 @@ llm.httpx.stream = lambda m, u, **k: httpx.Client(transport=httpx.MockTransport(
 w = MainWindow(mcp_config=tmp / "mcp.json"); tp = w.tools_panel; v = w.chat_view; sel = w.selector; ctx = w.context
 check("servers connect in the background", wait(lambda: tp.states and not tp.connect_req.busy, 40) and tp.states["toolbox"].status == "ready", tp.states)
 top = tp.tree.topLevelItem(0)
-check("tree: a server and 23 tools, all off", top.childCount() == 23 and top.checkState(0) == Qt.Unchecked
-      and all(top.child(i).checkState(0) == Qt.Unchecked for i in range(23)) and "toolbox" in top.text(0))
-names = {top.child(i).text(0) for i in range(23)}
+def leaves(item):
+    out = []
+    for i in range(item.childCount()):
+        c = item.child(i)
+        out += [c] if c.data(0, KIND_ROLE) == "tool" else leaves(c)
+    return out
+groups = {top.child(i).text(0).split(" (")[0]: top.child(i) for i in range(top.childCount())}
+check("tree: a server with tool groups from TOOL_GROUPS", list(groups) == list(TOOL_GROUPS) and "toolbox" in top.text(0)
+      and all(g.data(0, KIND_ROLE) == "group" for g in groups.values()), list(groups))
+check("tree: 23 tools, each in its group", len(leaves(top)) == 23
+      and all(c.text(0).split()[0] in TOOL_GROUPS[name] for name, g in groups.items() for c in leaves(g)))
+names = {c.text(0) for c in leaves(top)}
 check("permission tag on a write tool", any(n.startswith("notes_write") and "[asks]" in n for n in names) and "calc" in names, names)
-check("info: no tools enabled", "No tools enabled" in tp.info.text() and tp.prompt_tokens() == 0, tp.info.text())
+mem = groups["Memory"]
+check("draft: only the default memory tools are on", tp.enabled == set(DEFAULT_CHAT_TOOLS) and top.checkState(0) == Qt.PartiallyChecked
+      and mem.checkState(0) == Qt.PartiallyChecked and all(g.checkState(0) == Qt.Unchecked for n, g in groups.items() if n != "Memory"),
+      tp.enabled)
+check("groups start collapsed, the server expanded", top.isExpanded() and not any(g.isExpanded() for g in groups.values()))
+mem.setExpanded(True); check("a group expands", mem.isExpanded())
+mem.setExpanded(False); check("a group collapses", not mem.isExpanded())
+mem.setExpanded(True)
+save = next(c for c in leaves(mem) if c.data(0, ID_ROLE) == "toolbox.memory_save")
+save.setCheckState(0, Qt.Checked)
+check("a tool toggle inside a group", "toolbox.memory_save" in tp.enabled and len(tp.enabled) == 4 and mem.checkState(0) == Qt.PartiallyChecked)
+groups["Web"].setCheckState(0, Qt.Checked)
+check("a group toggle enables the whole group", {"toolbox.web_search", "toolbox.web_search_internet", "toolbox.web_extract"} <= tp.enabled
+      and len(tp.enabled) == 7 and groups["Web"].checkState(0) == Qt.Checked)
+tp.set_policy("toolbox.calc", "deny"); tp.set_policy("toolbox.calc", None)
+top = tp.tree.topLevelItem(0); groups = {top.child(i).text(0).split(" (")[0]: top.child(i) for i in range(top.childCount())}
+check("expanded groups stay expanded after a rebuild", groups["Memory"].isExpanded() and not groups["Web"].isExpanded())
+top.setCheckState(0, Qt.Unchecked)
+check("info: no tools enabled", tp.enabled == set() and "No tools enabled" in tp.info.text() and tp.prompt_tokens() == 0, tp.info.text())
 
 # profile and connection (the model server is faked, the address is fictitious)
 c = ctx.connections; c.name.setText("lm"); c.url.setText("127.0.0.1:1"); c.save_btn.click()
@@ -128,7 +155,7 @@ lm.script(write(), say("ok")); v.input.setPlainText("and once more"); v.send_btn
 last = [r for r in db.list_messages(w.chat_id) if r["role"] == "tool"][-1]
 check("deny: no question, blocked, no file", asked == [] and "blocked" in last["content"] and not notes.exists(), last["content"])
 check("the policy is saved in the DB and shown in the tree", db.load_tool_policies() == {"toolbox.notes_write": "deny"}
-      and any("[blocked]" in tp.tree.topLevelItem(0).child(i).text(0) for i in range(23)))
+      and any("[blocked]" in c.text(0) for c in leaves(tp.tree.topLevelItem(0))))
 tp.set_policy("toolbox.notes_write", None); check("policy reset", db.load_tool_policies() == {} and tp.policy_for(next(t for t in tp.tools if t.name == "notes_write")) == "ask")
 
 # ---------- auto-approve: "ask" runs without the window, "deny" stays blocked ----------
@@ -140,7 +167,7 @@ check("auto-approve: saved in the DB, warning shown", db.get_setting(AUTO_APPROV
 lm.script(write(), say("ok")); v.input.setPlainText("note with auto-approve"); v.send_btn.click(); wait(lambda: w.stream is None, 60)
 check("auto-approve: no question, the file is written", asked == [] and notes.exists() and notes.read_text(encoding="utf-8") == "my note")
 check("auto-approve does not change the stored policy or the tree tag", tp.policy_for(next(t for t in tp.tools if t.name == "notes_write")) == "ask"
-      and any(tp.tree.topLevelItem(0).child(i).text(0).startswith("notes_write") and "[asks]" in tp.tree.topLevelItem(0).child(i).text(0) for i in range(23)))
+      and any(c.text(0).startswith("notes_write") and "[asks]" in c.text(0) for c in leaves(tp.tree.topLevelItem(0))))
 tp.set_policy("toolbox.notes_write", "deny"); notes.unlink()
 lm.script(write(), say("ok")); v.input.setPlainText("blocked with auto-approve"); v.send_btn.click(); wait(lambda: w.stream is None, 60)
 last = [r for r in db.list_messages(w.chat_id) if r["role"] == "tool"][-1]
@@ -158,9 +185,26 @@ last = [r for r in db.list_messages(w.chat_id) if r["role"] == "tool"][-1]
 check("a disabled tool is unavailable to the model", "in the catalog" in last["content"], last["content"])
 check("the catalog in the request has no disabled tool", "time_now" not in lm.requests[0]["messages"][0]["content"])
 
-# ---------- second chat: tools are off, no tools go into the request ----------
+# ---------- second chat: only the default memory tools, unaffected by the previous chat ----------
 w.new_chat(); chat2 = w.chat_id
-check("new chat: tools are off", tp.enabled == set() and "No tools enabled" in tp.info.text())
+check("new chat: exactly the default tools", tp.enabled == set(DEFAULT_CHAT_TOOLS) == db.load_chat_tools(chat2)
+      and "Enabled: 3" in tp.info.text(), tp.enabled)
+memitem = next(c for c in leaves(tp.tree.topLevelItem(0)) if c.data(0, ID_ROLE) == "toolbox.memory_read")
+memitem.setCheckState(0, Qt.Unchecked)
+check("a change in the new chat stays in that chat, the default set is unchanged",
+      db.load_chat_tools(chat2) == {"toolbox.memory_search", "toolbox.memory_topics"} and len(DEFAULT_CHAT_TOOLS) == 3
+      and tp.default_tool_ids() == set(DEFAULT_CHAT_TOOLS))
+tp.enabled = set(); tp._sync(); tp.selection_changed.emit()  # this part of the test checks a request without tools
+import logging, ui.tools_panel as tools_panel_mod
+logged = []
+class _Catch(logging.Handler):
+    def emit(self, record): logged.append(record.getMessage())
+tools_panel_mod.log.addHandler(_Catch())
+real_default = tools_panel_mod.DEFAULT_CHAT_TOOLS
+tools_panel_mod.DEFAULT_CHAT_TOOLS = real_default + ("toolbox.no_such_tool",)
+check("a missing default tool is skipped with a warning", tp.default_tool_ids() == set(real_default)
+      and any("toolbox.no_such_tool" in m for m in logged), logged)
+tools_panel_mod.DEFAULT_CHAT_TOOLS = real_default
 lm.script(say("hello!")); v.input.setPlainText("hello"); v.send_btn.click(); wait(lambda: w.stream is None, 60)
 check("without tools: no tools and no catalog in the request", "tools" not in lm.requests[0] and "toolbox" not in json.dumps(lm.requests[0], ensure_ascii=False)
       and w.last_requests[chat2]["tools"] == [])
@@ -186,8 +230,8 @@ check("enabled tools survived the restart", len(tp.enabled) == 22 and len(tp.ena
 check("broken config: a clear error, the app is alive", "Could not connect the servers" in tp.info.text(), tp.info.text())
 
 # ---------- an error and a stop leave a "System" line in the chat ----------
-tp.enabled = set(); tp._sync()            # no tools, to check only this
 w.new_chat(); sys_chat = w.chat_id
+tp.enabled = set(); tp._sync(); tp.selection_changed.emit()  # no tools, to check only this
 healthy = llm.httpx.stream
 llm.httpx.stream = lambda m, u, **k: httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(500, json={"error": {"message": "boom"}}))).stream(m, u, json=k.get("json"), headers=k.get("headers"))
 v.input.setPlainText("first question"); v.send_btn.click(); wait(lambda: w.stream is None, 30)

@@ -69,7 +69,14 @@ DIABLO = Theme(
     dim="#6a5a40", normal="#8a7650", warn="#e0b04a", over="#ff4a3a",
     code_bg="#1a0f0a", code_fg="#e8d9b5", inline_code="#e0b04a", link="#e0a040", table_head="#2a130e", quote="#a89870",
 )
-THEMES = {t.key: t for t in (DARK, LIGHT, DIABLO)}
+# Matrix: shades of terminal green; errors and overflows stay red so they are not lost among the greens
+MATRIX = Theme(
+    "matrix", "Matrix", "theme_matrix.qss",
+    user="#66ff8c", assistant="#33ff66", system="#22b347", reasoning="#1f8a3a", tool="#b8ff66", tool_error="#ff5555",
+    dim="#2f6b3f", normal="#22b347", warn="#ccff33", over="#ff5555",
+    code_bg="#061208", code_fg="#b8ffc8", inline_code="#ccff66", link="#66ffcc", table_head="#0f3a1a", quote="#22b347",
+)
+THEMES = {t.key: t for t in (DARK, LIGHT, DIABLO, MATRIX)}
 DEFAULT_KEY = DARK.key
 
 

@@ -113,14 +113,15 @@ class MainWindow(QMainWindow):
     # --- chats ---
 
     def new_chat(self):
-        # files checked before the first chat is created move into it; otherwise a chat starts empty
+        # files and tools chosen before the first chat is created move into it (the draft starts from the
+        # default tool set too); otherwise a chat starts with no files and the default tool set
         draft = self.files_panel.selection.copy() if self.chat_id is None else Selection()
-        draft_tools = set(self.tools_panel.enabled) if self.chat_id is None else set()
+        tools = set(self.tools_panel.enabled) if self.chat_id is None else self.tools_panel.default_tool_ids()
         chat_id = db.create_chat()
         if not draft.is_empty():
             db.save_chat_context(chat_id, draft.include, draft.exclude)
-        if draft_tools:
-            db.save_chat_tools(chat_id, draft_tools)
+        if tools:
+            db.save_chat_tools(chat_id, tools)
         self.chat_list.reload(select_id=chat_id)
         self.open_chat(chat_id)
 
@@ -132,7 +133,7 @@ class MainWindow(QMainWindow):
             self.chat_view.set_title("Dialog")
             self.chat_view.set_messages([])
             self.files_panel.set_selection(Selection())
-            self.tools_panel.set_enabled(set())
+            self.tools_panel.set_enabled(self.tools_panel.default_tool_ids())
         else:
             self.chat_view.set_title(chat["title"])
             self.chat_view.set_messages(db.list_messages(chat_id))

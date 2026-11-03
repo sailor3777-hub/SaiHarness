@@ -20,14 +20,16 @@ qInstallMessageHandler(lambda mode, ctx, msg: warnings.append(msg))
 app = QApplication([])
 
 # ---- the set of themes ----
-check("three themes: dark, light, Diablo", list(themes.THEMES) == ["dark", "light", "diablo"]
-      and [t.title for t in themes.THEMES.values()] == ["Dark", "Light", "Diablo"])
+check("four themes: dark, light, Diablo, Matrix", list(themes.THEMES) == ["dark", "light", "diablo", "matrix"]
+      and [t.title for t in themes.THEMES.values()] == ["Dark", "Light", "Diablo", "Matrix"])
 fields = ("user assistant system reasoning tool tool_error dim normal warn over code_bg code_fg inline_code link table_head quote").split()
 bad = [(t.key, f) for t in themes.THEMES.values() for f in fields if not QColor(getattr(t, f)).isValid()]
 check("all theme colors are valid", not bad, bad)
 check("the dark theme matches the old theme.qss", "background-color: #000000" in themes.DARK.qss() and themes.DARK.qss_file == "theme.qss")
 check("light has a light background, Diablo has gold and a serif font",
       "#f6f6f4" in themes.LIGHT.qss() and "#d4a840" in themes.DIABLO.qss() and "Palatino" in themes.DIABLO.qss())
+check("Matrix: near-black background, green text, no animation", "#030703" in themes.MATRIX.qss() and "#33ff66" in themes.MATRIX.qss()
+      and "animation" not in themes.MATRIX.qss().lower())
 check("the richtext css has the theme colors", themes.DIABLO.code_bg in themes.DIABLO.richtext_css() and themes.LIGHT.link in themes.LIGHT.richtext_css())
 check("dark by default", themes.current().key == "dark" and themes.saved_key() == "dark")
 
@@ -36,7 +38,7 @@ w = MainWindow(mcp_config=tmp / "mcp.json", connect_mcp=False)
 cl = w.chat_list; lay = cl.layout()
 idx = {lay.itemAt(i).widget(): i for i in range(lay.count()) if lay.itemAt(i).widget()}
 check("the theme selector is above the \"New chat\" button", idx[cl.theme_box] + 1 == idx[cl.new_btn], idx)
-check("the selector has three themes, the current one is selected", cl.theme_box.count() == 3 and cl.theme_box.currentData() == "dark")
+check("the selector has four themes, the current one is selected", cl.theme_box.count() == 4 and cl.theme_box.currentData() == "dark")
 
 # ---- changing the theme ----
 w.chat_view._blocks = [
@@ -45,7 +47,7 @@ w.chat_view._blocks = [
 ]
 w.chat_view._render()
 check("dark: the \"You\" label is blue", themes.DARK.user in w.chat_view._block_html(w.chat_view._blocks[0]))
-for key in ("light", "diablo", "dark"):
+for key in ("light", "diablo", "matrix", "dark"):
     i = cl.theme_box.findData(key)
     cl.theme_box.setCurrentIndex(i); cl.theme_box.activated.emit(i)
     th = themes.THEMES[key]

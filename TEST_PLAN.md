@@ -104,7 +104,7 @@ Add the roots: **F1**.
 
 Preparation: the roots `Alpha` and `Beta` are added (step F1; checkboxes on the Files tab are not needed). On the Tools tab check `toolbox`: all its tools are enabled.
 
-- [x] **G1 Enabling.** In a new chat tools are off, at the bottom `No tools enabled…`. After enabling: `Enabled: N. In the request ≈… tok. (3 meta-tools and the catalog). Full schemas would take ≈… tok.`
+- [x] **G1 Enabling.** In a new chat only memory_search, memory_topics and memory_read are on (Memory group). After enabling: `Enabled: N. In the request ≈… tok. (3 meta-tools and the catalog). Full schemas would take ≈… tok.`
 - [x] **G2 Calculation.** "What is 1234*5678? Use the tools." The chat shows `▸ toolbox.calc(...)`, the result `◂ toolbox.calc 7006652`.
 - [x] **G3 Time.** "What time is it on the computer now?" → `toolbox.time_now`.
 - [ ] **G4 Folder list.** "What is in my folders?" The model should show both: Alpha and Beta (`fs_list` without path or `fs_roots`).
@@ -126,7 +126,7 @@ Preparation: the roots `Alpha` and `Beta` are added (step F1; checkboxes on the 
   - "Reset…": `[asks]` again.
 - [ ] **G14 Read permissions.** Switch `calc` to "Ask for confirmation": a window appears on a call. "Reset" brings back no questions.
 - [ ] **G15 No suitable tool.** "Send an email to test@example.com". The model should answer that there is no tool for this and not claim it sent it (depends on the model).
-- [ ] **G16 Tools per chat.** In chat A they are on. "+ New chat": off, at the bottom `No tools enabled…`. Go back to A: on. Restart: the same. Uncheck only `fs_search`: the Request window does not have it in the catalog, and when asked to search the model answers `not in the catalog`.
+- [ ] **G16 Tools per chat.** In chat A they are on. "+ New chat": only the three memory reading tools are on. Go back to A: on. Restart: the same. Uncheck only `fs_search`: the Request window does not have it in the catalog, and when asked to search the model answers `not in the catalog`.
 - [ ] **G17 Stop in the middle of a chain.** Give a multi-step task ("find yellow sausage, read the file and count the lines") and press "Stop". Status `Stopped`, the chat has no calls without results. Restart the app and write "continue": the dialog goes on without errors.
 - [ ] **G18 Server config.** The "Config" button opens `data\mcp.json`.
   - Add the line `"disabled": true` to `toolbox`, "Restart" → `○ toolbox — disabled in the config`. Remove it, "Restart" → `●` again.
