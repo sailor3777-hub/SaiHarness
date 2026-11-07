@@ -6,11 +6,11 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QMainWindow, QSplitter
 
-from core import db, images, llm, memory, vision
+from core import db, images, llm, memory, subagent, vision
 from core.agent import hosttools
 from core.context_builder import build_messages, estimate_request_tokens
 from core.files import Selection
-from core.tools import META_TOOLS, Catalog, ToolRouter, describe_call, result_label
+from core.tools import DELEGATE_TOOL, META_TOOLS, Catalog, ToolRouter, describe_call, result_label
 from ui.chat_list import ChatList
 from ui.chat_view import ChatView
 from ui import themes
@@ -87,6 +87,7 @@ class MainWindow(QMainWindow):
         self.limit_req.failed.connect(self._on_limit_failed)
         self.files_panel.selection_changed.connect(self._on_selection_changed)
         self.tools_panel = self.context.tools_panel
+        self.tools_panel.main_profile = self._current_profile
         self.broker = PermissionBroker(self)
         self.tools_panel.selection_changed.connect(self._on_tools_changed)
         self.tools_panel.catalog_changed.connect(self._refresh_context_info)
@@ -117,11 +118,14 @@ class MainWindow(QMainWindow):
         # default tool set too); otherwise a chat starts with no files and the default tool set
         draft = self.files_panel.selection.copy() if self.chat_id is None else Selection()
         tools = set(self.tools_panel.enabled) if self.chat_id is None else self.tools_panel.default_tool_ids()
+        agents = set(self.tools_panel.agents) if self.chat_id is None else set()
         chat_id = db.create_chat()
         if not draft.is_empty():
             db.save_chat_context(chat_id, draft.include, draft.exclude)
         if tools:
             db.save_chat_tools(chat_id, tools)
+        if agents:
+            db.save_chat_agents(chat_id, agents)
         self.chat_list.reload(select_id=chat_id)
         self.open_chat(chat_id)
 
@@ -134,11 +138,13 @@ class MainWindow(QMainWindow):
             self.chat_view.set_messages([])
             self.files_panel.set_selection(Selection())
             self.tools_panel.set_enabled(self.tools_panel.default_tool_ids())
+            self.tools_panel.set_agents(set())
         else:
             self.chat_view.set_title(chat["title"])
             self.chat_view.set_messages(db.list_messages(chat_id))
             self.files_panel.set_selection(Selection(*db.load_chat_context(chat_id)))
             self.tools_panel.set_enabled(db.load_chat_tools(chat_id))
+            self.tools_panel.set_agents(db.load_chat_agents(chat_id))
             if self.stream and self.stream["chat_id"] == chat_id:
                 self.chat_view.begin_live(self.stream["reasoning"], self.stream["content"])
         self._refresh_lock()
@@ -152,16 +158,17 @@ class MainWindow(QMainWindow):
     def _on_tools_changed(self):
         if self.chat_id is not None:
             db.save_chat_tools(self.chat_id, self.tools_panel.enabled)
+            db.save_chat_agents(self.chat_id, self.tools_panel.agents)
         self._refresh_context_info()
 
-    def _tools_text(self, profile, catalog) -> str:
-        """The tool catalog, plus the memory block (if memory tools are enabled) and the
-        connected-hosts block (if any remote host tools are in the catalog)."""
+    def _tools_text(self, profile, catalog, agents=()) -> str:
+        """The tool catalog, plus the memory block (if memory tools are enabled), the
+        connected-hosts block (if any remote host tools are in the catalog) and the agents block."""
         if not catalog:
             return ""
         with closing(db.connect()) as conn:
             block = memory.prompt_block(profile["memory_rules"], [t.id for t in catalog.tools], memory.Memory(conn))
-        parts = [catalog.text()]
+        parts = [catalog.text(), subagent.catalog_block(agents)]
         if block:
             parts.append(block)
         agent = getattr(self.tools_panel, "agent", None)
@@ -172,15 +179,14 @@ class MainWindow(QMainWindow):
             agent_block = hosttools.prompt_block(hosts)
             if agent_block:
                 parts.append(agent_block)
-        return "\n\n".join(parts)
+        return "\n\n".join(p for p in parts if p)
 
     # --- context size ---
 
     def _refresh_context_info(self, force: bool = False):
         """Updates the "whole request" estimate and the model's context limit under the file tree."""
-        profile = self._bound_profile()
-        if profile is None and self.selector.profile.currentText():
-            profile = db.get_profile(self.selector.profile.currentText())
+        profile = self._current_profile()
+        self.tools_panel.refresh_agents()  # the "model reload" warning depends on the chat's profile
         history = db.list_messages(self.chat_id) if self.chat_id is not None else []
         messages = build_messages(profile, history) if profile else [
             {"role": m["role"], "content": m["content"]} for m in history if m["content"]
@@ -263,6 +269,13 @@ class MainWindow(QMainWindow):
         self._free_choice = name
         self._refresh_context_info()
 
+    def _current_profile(self):
+        """The chat's profile: the locked one, otherwise the one chosen on the Model tab."""
+        profile = self._bound_profile()
+        if profile is None and self.selector.profile.currentText():
+            profile = db.get_profile(self.selector.profile.currentText())
+        return profile
+
     def _bound_profile(self):
         """The profile locked to the current chat, if it still exists."""
         chat = db.get_chat(self.chat_id) if self.chat_id is not None else None
@@ -325,12 +338,14 @@ class MainWindow(QMainWindow):
             return
 
         enabled = self.tools_panel.enabled_tools()
-        catalog = Catalog(enabled) if enabled else None
+        agents = self.tools_panel.enabled_agents()
+        catalog = Catalog(enabled) if enabled or agents else None
+        meta = (META_TOOLS + [DELEGATE_TOOL] if agents else META_TOOLS) if catalog else None
         # Context overflow guard: before writing anything to the history, check that the request fits
         known_history = db.list_messages(self.chat_id) if self.chat_id is not None else []
-        candidate = build_messages(profile, known_history, bundle.files, self._tools_text(profile, catalog))
+        candidate = build_messages(profile, known_history, bundle.files, self._tools_text(profile, catalog, agents))
         candidate.append({"role": "user", "content": images.user_content(text, picked)})
-        overflow = self._context_overflow(conn, profile, candidate, META_TOOLS if catalog else None)
+        overflow = self._context_overflow(conn, profile, candidate, meta)
         if overflow:
             self.chat_view.set_status(overflow)
             return
@@ -351,24 +366,27 @@ class MainWindow(QMainWindow):
 
         router = ToolRouter(self.tools_panel.router_manager, catalog, policy_for=self.tools_panel.effective_policy) if catalog else None
         messages = build_messages(
-            profile, db.list_messages(self.chat_id), bundle.files, self._tools_text(profile, catalog)
+            profile, db.list_messages(self.chat_id), bundle.files, self._tools_text(profile, catalog, agents)
         )
         key = (conn["url"], profile["base_model"])
         self._stream_seq += 1
         thread = ChatStreamer(
             self._stream_seq, conn["url"], conn["api_key"], profile["base_model"],
             messages, profile["temperature"], profile["max_tokens"],
-            tools=META_TOOLS if catalog else None, router=router, max_steps=profile["max_steps"],
+            tools=meta, router=router, max_steps=profile["max_steps"],
             context_limit=self._known_limit(conn, profile), scale=max(1.0, self._scale.get(key, 1.0)),
             prepare=self._image_preparer(conn, profile) if images.has_placeholders(messages) else None,
         )
         if router is not None:
             router.confirm = lambda tool_id, args, cancel=thread.cancel_event: self.broker.ask(tool_id, args, cancel)
+            if agents:
+                router.delegate = self._delegator(thread, Catalog(enabled) if enabled else None, agents)
         self.last_requests[self.chat_id] = {
             "url": conn["url"], "model": profile["base_model"], "temperature": profile["temperature"],
             "max_tokens": profile["max_tokens"], "messages": messages,
-            "tools": [t["function"]["name"] for t in META_TOOLS] if catalog else [],
+            "tools": [t["function"]["name"] for t in meta] if meta else [],
         }
+        thread.progress.connect(self._on_progress)
         thread.delta.connect(self._on_delta)
         thread.tool_running.connect(self._on_tool_running)
         thread.tool_round.connect(self._on_tool_round)
@@ -389,6 +407,34 @@ class MainWindow(QMainWindow):
         self._update_status()
         self.chat_list.reload(select_id=self.chat_id)
         thread.start()
+
+    def _delegator(self, thread: ChatStreamer, catalog: Catalog | None, agents: list):
+        """delegate(agent, task) for this reply: runs in the reply thread, waits for the subagent and returns its result.
+
+        The subagent gets the chat's tools and permissions (auto-approve included), the same Stop button, and asks for
+        confirmations in the same window with its name; it has no delegate itself."""
+        names = ", ".join(p["name"] for p in agents)
+        sid = thread.stream_id
+
+        def delegate(name: str, task: str) -> tuple[str, bool]:
+            profile = subagent.find_agent(agents, name)
+            if profile is None:
+                return f"there is no agent \"{name}\". Agents: {names}.", True
+            profile = db.get_profile(profile["name"]) or profile  # the profile may have been edited since the reply started
+            setup = subagent.Setup(
+                manager=self.tools_panel.router_manager, catalog=catalog, policy_for=self.tools_panel.effective_policy,
+                confirm=lambda who, tool_id, args: self.broker.ask(tool_id, args, thread.cancel_event, who=who),
+                tools_text=lambda p: self._tools_text(p, catalog), cancel=thread.cancel_event,
+                progress=lambda text: thread.progress.emit(sid, text),
+            )
+            conn = db.get_connection(profile["connection"]) if profile["connection"] else None
+            return subagent.run(profile, conn, task, setup)
+        return delegate
+
+    def _on_progress(self, stream_id: int, text: str):
+        s = self.stream
+        if s and s["id"] == stream_id and s["chat_id"] == self.chat_id:
+            self.chat_view.set_status(text)
 
     @staticmethod
     def _image_preparer(conn, profile):
@@ -442,7 +488,8 @@ class MainWindow(QMainWindow):
                  "tool_calls": json.dumps(assistant["tool_calls"], ensure_ascii=False)}]
         rows += [
             {"role": "tool", "content": r["content"], "tool_call_id": r["tool_call_id"],
-             "tool_name": labels.get(r["tool_call_id"], r["name"])}
+             "tool_name": labels.get(r["tool_call_id"], r["name"]),
+             "agent_log": getattr(r["content"], "agent_log", "")}  # a subagent's work (delegate), not sent to the model
             for r in results
         ]
         db.add_messages(s["chat_id"], rows)

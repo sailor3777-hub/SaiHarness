@@ -2,13 +2,16 @@ import logging
 import os
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+import json
+
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem, QPushButton, QLabel, QMenu, QComboBox, QLineEdit, QCheckBox,
+    QScrollArea, QSplitter, QToolButton, QWidgetAction,
 )
 
-from core import db
+from core import db, subagent
 from core import imagegen, vision
 from core.connection import normalize_url
 from core.vision import VISION_PROFILE_KEY
@@ -36,6 +39,7 @@ POLICY_NAMES = {"auto": "Run without asking", "ask": "Ask for confirmation", "de
 CHECK = {True: Qt.Checked, False: Qt.Unchecked}
 AUTO_APPROVE_KEY = "auto_approve"  # app_settings: "1" = calls that ask for confirmation run without the window
 AUTO_APPROVE_WARNING = "Auto-approve is on: write tools, shell_run and web_extract run without asking."
+SPLIT_KEY = "tools_split"  # app_settings: heights of the tool tree and the settings below it (JSON list)
 
 
 def _walk(item: QTreeWidgetItem):
@@ -54,7 +58,7 @@ def _leaf_ids(item: QTreeWidgetItem) -> list[str]:
 class ToolsPanel(QWidget):
     """MCP servers and their tools. Checkboxes choose which tools the model can use in this chat."""
 
-    selection_changed = Signal()  # the user changed the set of enabled tools
+    selection_changed = Signal()  # the user changed the set of enabled tools or agents
     catalog_changed = Signal()    # servers were (re)connected
 
     def __init__(self, manager: McpManager, config_path: Path, auto_connect: bool = True, agent=None):
@@ -69,6 +73,8 @@ class ToolsPanel(QWidget):
         else:
             self.router_manager = manager
         self.enabled: set[str] = set()
+        self.agents: set[str] = set()  # names of the profiles the chat's model may delegate to
+        self.main_profile = lambda: None  # the chat's profile (set by the window): for the "model reload" warning
         self.policies: dict[str, str] = db.load_tool_policies()
         self.tools: list[ToolInfo] = []
         self.states: dict[str, ServerState] = {}
@@ -121,18 +127,66 @@ class ToolsPanel(QWidget):
         self.comfy_status = QLabel("")
         self.comfy_status.setObjectName("status")
         self.comfy_status.setWordWrap(True)
+        self.agents_btn = QToolButton()
+        self.agents_btn.setPopupMode(QToolButton.InstantPopup)
+        self.agents_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.agents_btn.setSizePolicy(self.vision_combo.sizePolicy())
+        self.agents_btn.setToolTip("Model profiles the chat's model may hand tasks to (delegate).\n"
+                                   "An agent works with this chat's tools and permissions, but does not see the chat.\n"
+                                   "Its description for the model is the \"As an agent\" field in Model Builder.")
+        self.agents_menu = QMenu(self)
+        self.agents_menu.aboutToShow.connect(self._fill_agents_menu)
+        self.agents_btn.setMenu(self.agents_menu)
+        agents_row = QHBoxLayout()
+        agents_row.addWidget(QLabel("Agents:"))
+        agents_row.addWidget(self.agents_btn, 1)
+        self.agents_status = QLabel("")
+        self.agents_status.setObjectName("status")
+        self.agents_status.setWordWrap(True)
+
+        settings = QWidget()  # everything under the tree; the splitter handle above it changes its height
+        lower = QVBoxLayout(settings)
+        lower.setContentsMargins(0, 0, 0, 0)
+        lower.addLayout(agents_row)
+        lower.addWidget(self.agents_status)
+        lower.addLayout(vision_row)
+        for w in self.vision_manual:
+            lower.addWidget(w)
+        lower.addWidget(self.vision_status)
+        lower.addWidget(self.comfy_url)
+        lower.addWidget(self.comfy_status)
+        lower.addWidget(self.info)
+        lower.addStretch(1)
+        scroll = QScrollArea()  # a low panel scrolls instead of squeezing the fields (vertically only)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(settings)
+        # the panel keeps its old minimum width: it is not squeezed narrower than the fields under the tree
+        scroll.setMinimumWidth(settings.minimumSizeHint().width() + scroll.verticalScrollBar().sizeHint().width())
+        self.split = QSplitter(Qt.Vertical)
+        self.split.addWidget(self.tree)
+        self.split.addWidget(scroll)
+        self.split.setChildrenCollapsible(False)
+        self.split.setStretchFactor(0, 1)
+        try:
+            sizes = json.loads(db.get_setting(SPLIT_KEY) or "null")
+        except ValueError:
+            sizes = None
+        valid = isinstance(sizes, list) and len(sizes) == 2 and all(isinstance(v, int) and v > 0 for v in sizes)
+        self.split.setSizes(sizes if valid else [500, 400])  # by default the settings get a good part of the height
+        self._split_timer = QTimer(self)
+        self._split_timer.setSingleShot(True)
+        self._split_timer.setInterval(400)
+        self._split_timer.timeout.connect(lambda: db.set_setting(SPLIT_KEY, json.dumps(self.split.sizes())))
+        self.split.splitterMoved.connect(lambda *_: self._split_timer.start())
+
         layout = QVBoxLayout(self)
         layout.addLayout(buttons)
         layout.addWidget(self.auto_approve)
         layout.addWidget(self.auto_warning)
-        layout.addWidget(self.tree, 1)
-        layout.addLayout(vision_row)
-        for w in self.vision_manual:
-            layout.addWidget(w)
-        layout.addWidget(self.vision_status)
-        layout.addWidget(self.comfy_url)
-        layout.addWidget(self.comfy_status)
-        layout.addWidget(self.info)
+        layout.addWidget(self.split, 1)
+        self.refresh_agents()
 
         self.connect_req = AsyncCall(self._connect, self)
         self.connect_req.TIMEOUT_MS = 120_000
@@ -269,6 +323,7 @@ class ToolsPanel(QWidget):
         self.refresh_vision_profiles()
         self.comfy_url.setText(db.get_setting(imagegen.COMFY_URL_KEY))
         self._update_comfy_view()
+        self.refresh_agents()
 
     # --- selection ---
 
@@ -277,6 +332,59 @@ class ToolsPanel(QWidget):
         self.enabled = set(tool_ids)
         self._sync()
         self._render()
+
+    # --- agents (subagents for delegate) ---
+
+    def set_agents(self, names):
+        """Show the chat's agents (without the selection_changed signal)."""
+        self.agents = set(names)
+        self.refresh_agents()
+        self._render()
+
+    def enabled_agents(self) -> list:
+        """Profiles of the enabled agents that still exist (a deleted profile is skipped)."""
+        return [p for p in db.list_profiles() if p["name"] in self.agents]
+
+    def _fill_agents_menu(self):
+        """The profile list is read when the menu opens: profiles change in Model Builder."""
+        self.agents_menu.clear()
+        profiles = db.list_profiles()
+        if not profiles:
+            act = self.agents_menu.addAction("No model profiles yet: create one in Model Builder")
+            act.setEnabled(False)
+            return
+        for p in profiles:
+            box = QCheckBox(p["name"])  # a checkbox inside the menu: clicking it does not close the menu
+            box.setChecked(p["name"] in self.agents)
+            box.setToolTip(subagent.description(p))
+            box.setContentsMargins(6, 2, 6, 2)
+            box.toggled.connect(lambda on, name=p["name"]: self._toggle_agent(name, on))
+            act = QWidgetAction(self.agents_menu)
+            act.setDefaultWidget(box)
+            self.agents_menu.addAction(act)
+
+    def _toggle_agent(self, name: str, on: bool):
+        (self.agents.add if on else self.agents.discard)(name)
+        self.refresh_agents()
+        self._render()
+        self.selection_changed.emit()
+
+    def refresh_agents(self):
+        enabled = self.enabled_agents()
+        names = [p["name"] for p in enabled]
+        self.agents_btn.setText(", ".join(names) if names else "none")
+        notes = []
+        main = self.main_profile()
+        main_conn = db.get_connection(main["connection"]) if main is not None and main["connection"] else None
+        for p in enabled:
+            conn = db.get_connection(p["connection"]) if p["connection"] else None
+            if conn is None:
+                notes.append(f"{p['name']}: no connection, choose one in Model Builder.")
+            elif main_conn is not None and conn["url"] == main_conn["url"] and p["base_model"] != main["base_model"]:
+                notes.append(f"{p['name']}: another model on the same server, LM Studio may reload models "
+                             "on every call.")
+        self.agents_status.setText("\n".join(notes))
+        self.agents_status.setVisible(bool(notes))
 
     def default_tool_ids(self) -> set[str]:
         """The tool set a new chat starts with: DEFAULT_CHAT_TOOLS minus the tools the connected servers do not have.
@@ -457,22 +565,27 @@ class ToolsPanel(QWidget):
         return Catalog(self.enabled_tools()).text()
 
     def prompt_tokens(self) -> int:
-        """How many tokens the tools take in the request: meta-tools and catalog (0 if nothing is enabled)."""
+        """How many tokens the tools take in the request: meta-tools, catalog and agents (0 if nothing is enabled)."""
         text = self.catalog_text()
-        return meta_tools_tokens() + estimate_tokens(text) if text else 0
+        agents = subagent.catalog_block(self.enabled_agents())
+        if not text and not agents:
+            return 0
+        return meta_tools_tokens(with_delegate=bool(agents)) + estimate_tokens(text) + estimate_tokens(agents)
 
     def _render(self):
         if self._error:
             self.info.setText(f"Could not connect the servers: {self._error}")
             return
         enabled = self.enabled_tools()
+        agents = len(self.enabled_agents())
         if not self.states:
             self.info.setText("Servers are not connected yet")
-        elif not enabled:
+        elif not enabled and not agents:
             self.info.setText("No tools enabled: they are not in the request and cost nothing.")
         else:
             full = schema_tokens(enabled)
+            meta = "4 meta-tools, the catalog and the agents" if agents else "3 meta-tools and the catalog"
             self.info.setText(
-                f"Enabled: {len(enabled)}. In the request ≈{self.prompt_tokens()} tok. (3 meta-tools and the catalog). "
-                f"Full schemas would take ≈{full} tok."
+                f"Enabled: {len(enabled)}" + (f", agents: {agents}" if agents else "") +
+                f". In the request ≈{self.prompt_tokens()} tok. ({meta}). Full schemas would take ≈{full} tok."
             )

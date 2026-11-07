@@ -69,6 +69,11 @@ class ModelBuilder(QWidget):
         self.memory_rules.setToolTip(
             "Applies when the memory_* tools are enabled in the chat (Tools tab): what to save and when, how "
             "to search. This is part of the agent's personality, rewrite it as you like. Reset: clear the field and save.")
+        self.agent_description = QLineEdit()
+        self.agent_description.setPlaceholderText("What this profile does as a subagent, in one line")
+        self.agent_description.setToolTip(
+            "Shown to the main model in the agents catalog when this profile is enabled as an agent on the Tools tab. "
+            "Empty: the start of the system prompt is used.")
         self.status = QLabel("")
         self.status.setWordWrap(True)
         self.save_btn = QPushButton("Save")
@@ -88,6 +93,7 @@ class ModelBuilder(QWidget):
         form.addRow("Tool steps", self.max_steps)
         form.addRow("Memory", self.memory)
         form.addRow("Memory rules", self.memory_rules)
+        form.addRow("As an agent", self.agent_description)
         form.addRow(self.status, self.save_btn)
 
         self.save_btn.clicked.connect(self._save)
@@ -148,6 +154,7 @@ class ModelBuilder(QWidget):
         self.max_steps.setValue(p["max_steps"])
         self.memory.setPlainText(p["memory"])
         self.memory_rules.setPlainText(p["memory_rules"] or DEFAULT_RULES)
+        self.agent_description.setText(p["agent_description"])
         note = ""
         if idx < 0:
             note = f" (connection \"{p['connection']}\" not found, choose another one)" if p["connection"] else \
@@ -169,6 +176,7 @@ class ModelBuilder(QWidget):
             name, connection, base, self.system_prompt.toPlainText(), self.temperature.value(),
             self.max_tokens.value(), self.memory.toPlainText(), self.max_steps.value(),
             "" if rules == DEFAULT_RULES.strip() else rules,  # unchanged rules are not copied: an update of the default text will reach them
+            agent_description=" ".join(self.agent_description.text().split()),
         )
         self.status.setText(f"Saved: {name}")
         self.saved.emit(name)

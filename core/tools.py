@@ -38,6 +38,12 @@ META_TOOLS = [
 ]
 META_NAMES = {t["function"]["name"] for t in META_TOOLS}
 
+# The fourth meta-tool: it goes into the request only when agents are enabled in the chat (core/subagent.py runs it)
+DELEGATE_TOOL = {"type": "function", "function": {
+    "name": "delegate", "description": "Hand a task to an agent from the agents list; returns the agent's result.",
+    "parameters": {"type": "object", "properties": {
+        "agent": {"type": "string"}, "task": {"type": "string"}}, "required": ["agent", "task"]}}}
+
 
 def _tool_timeout(tool) -> float:
     """The call budget of a tool; a host_<name>.<tool> of a remote agent gets the budget of the local tool of the same name."""
@@ -174,8 +180,8 @@ def result_label(name: str, arguments: str) -> str:
     return name
 
 
-def meta_tools_tokens() -> int:
-    return estimate_tokens(json.dumps(META_TOOLS, ensure_ascii=False))
+def meta_tools_tokens(with_delegate: bool = False) -> int:
+    return estimate_tokens(json.dumps(META_TOOLS + ([DELEGATE_TOOL] if with_delegate else []), ensure_ascii=False))
 
 
 def schema_tokens(tools: list[ToolInfo]) -> int:
@@ -250,6 +256,15 @@ class Catalog:
         return [t for _, _, t in sorted(scored)[:limit]]
 
 
+class WithLog(str):
+    """A tool result for the model, plus a log for the chat that the model does not see (a subagent's work)."""
+
+    def __new__(cls, text: str, agent_log: str = ""):
+        obj = super().__new__(cls, text)
+        obj.agent_log = agent_log
+        return obj
+
+
 def validate_arguments(tool: ToolInfo, arguments) -> list[str]:
     """Argument errors against the tool's JSON schema (an empty list means everything is fine)."""
     if not isinstance(arguments, dict):
@@ -274,6 +289,8 @@ class ToolRouter:
         self.confirm, self.call_timeout = confirm, call_timeout
         self.stuck: str | None = None  # tool whose call was blocked because of a repeating error: the agent loop stops on it
         self._errors: dict[str, tuple[str, int]] = {}  # tool -> (start of the last error text, how many times in a row)
+        # delegate(agent, task) -> (text, is_error): set only for the main chat, so a subagent cannot delegate further
+        self.delegate: Callable[[str, str], tuple[str, bool]] | None = None
 
     # --- entry ---
 
@@ -287,9 +304,12 @@ class ToolRouter:
             return self._describe(_tool_arg(args))
         if name == "call_tool":
             return self._call(_tool_arg(args), args.get("arguments"))
+        if name == "delegate":
+            return self._delegate(args.get("agent"), args.get("task"))
         if self.catalog.get(name):  # the model called a tool directly: run it, that is clearly what it meant
             return self._call(name, args)
-        return ERROR_PREFIX + f"there is no function \"{name}\". Available: find_tool, describe_tool, call_tool."
+        names = "find_tool, describe_tool, call_tool" + (", delegate" if self.delegate else "")
+        return ERROR_PREFIX + f"there is no function \"{name}\". Available: {names}."
 
     @staticmethod
     def _parse(arguments) -> dict | str:
@@ -346,23 +366,51 @@ class ToolRouter:
             return ERROR_PREFIX + f"calling {tool.id} is blocked in the user's settings."
         if policy == "ask" and not (self.confirm and self.confirm(tool.id, arguments)):
             return f"The user declined the call to {tool.id}. Do not repeat it unless asked again."
-        last = self._errors.get(tool.id)
+        blocked = self._blocked(tool.id, tool.id)
+        if blocked:
+            return blocked
+        text, is_error = self.manager.call(tool.server, tool.name, arguments, max(self.call_timeout, _tool_timeout(tool)))
+        return self._finish(tool.id, tool.id, text, is_error)
+
+    def _delegate(self, agent, task) -> str:
+        if self.delegate is None:
+            return ERROR_PREFIX + "delegate is not available here: do the task yourself with the tools."
+        if not isinstance(agent, str) or not agent.strip() or not isinstance(task, str) or not task.strip():
+            return ERROR_PREFIX + "pass agent (a name from the agents list) and task (the whole task in words)."
+        agent = agent.strip()
+        key, what = f"delegate:{agent.lower()}", f"delegate to {agent}"
+        blocked = self._blocked(key, what)
+        if blocked:
+            return blocked
+        text, is_error = self.delegate(agent, task.strip())
+        return self._finish(key, what, text, is_error)
+
+    # --- results ---
+
+    def _blocked(self, key: str, what: str) -> str:
+        """The refusal text if this call already returned the same error too many times in a row."""
+        last = self._errors.get(key)
         if last and last[1] >= REPEAT_ERROR_BLOCK - 1:
-            self.stuck = tool.id
-            return (ERROR_PREFIX + f"{tool.id} was not called: it has already returned the same error {last[1]} times "
+            self.stuck = what
+            return (ERROR_PREFIX + f"{what} was not called: it has already returned the same error {last[1]} times "
                     f"in a row ({last[0]}). Do not call it again: tell the user what went wrong and why, "
                     "and carry on without this tool.")
-        text, is_error = self.manager.call(tool.server, tool.name, arguments, max(self.call_timeout, _tool_timeout(tool)))
+        return ""
+
+    def _finish(self, key: str, what: str, text: str, is_error: bool) -> str:
+        """Truncation and error counting of a result. A subagent's log (WithLog) stays attached to the text."""
+        log = getattr(text, "agent_log", "")
         if len(text) > MAX_RESULT_CHARS:
             text = text[:MAX_RESULT_CHARS] + f"\n[truncated: showing {MAX_RESULT_CHARS} of {len(text)} characters]"
         if not is_error:
-            self._errors.pop(tool.id, None)
-            return text or "(empty result)"
-        key = text[:REPEAT_ERROR_KEY]
-        count = last[1] + 1 if last and last[0] == key else 1
-        self._errors[tool.id] = (key, count)
+            self._errors.pop(key, None)
+            return WithLog(text or "(empty result)", log)
+        last = self._errors.get(key)
+        short = text[:REPEAT_ERROR_KEY]
+        count = last[1] + 1 if last and last[0] == short else 1
+        self._errors[key] = (short, count)
         hint = ""
         if count >= 2:
-            hint = (f"\nThis is the same {tool.id} error {count} times in a row. Calling it again is pointless: "
+            hint = (f"\nThis is the same {what} error {count} times in a row. Calling it again is pointless: "
                     "tell the user the tool is not working and carry on without it.")
-        return ERROR_PREFIX + f"{text}{hint}"
+        return WithLog(ERROR_PREFIX + f"{text}{hint}", log)

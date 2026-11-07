@@ -8,10 +8,10 @@ from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap, QTextBlockFormat, QTextCursor, QTextDocument
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QPlainTextEdit, QPushButton, QLabel, QCheckBox, QFileDialog,
-    QSizePolicy,
+    QSizePolicy, QDialog, QTextBrowser,
 )
 
-from core import imagegen, images, markers
+from core import imagegen, images, markers, subagent
 from core.richtext import render_markdown
 from core.vision import IMAGE_EXTENSIONS
 from core.tools import describe_call
@@ -25,6 +25,7 @@ THUMB_WIDTH = 180        # thumbnail width of a picture in the chat history
 GENERATED_WIDTH = 320    # width of a picture drawn by image_generate
 PREVIEW_SIZE = 56        # size of an attached picture's preview above the input field
 IMAGE_FILTER = "Images (*.png *.jpg *.jpeg *.gif *.bmp *.webp);;All files (*)"
+AGENT_LOG_HREF = "agentlog:"  # link under a delegate result: opens the subagent's work (followed by the block index)
 
 
 def _image_files(mime) -> list[str]:
@@ -179,7 +180,33 @@ class ChatView(QWidget):
     def eventFilter(self, obj, event):
         if self._stick_bottom and event.type() in (QEvent.Wheel, QEvent.MouseButtonPress, QEvent.KeyPress):
             self._stick_bottom = False  # the user took over scrolling
+        if obj is self.history.viewport() and event.type() == QEvent.MouseButtonRelease:
+            anchor = self.history.anchorAt(event.position().toPoint())
+            if anchor.startswith(AGENT_LOG_HREF):
+                self._show_agent_log(anchor[len(AGENT_LOG_HREF):])
         return super().eventFilter(obj, event)
+
+    def _show_agent_log(self, index: str):
+        """The course of a subagent's work (the "Agent's work" link under a delegate result)."""
+        try:
+            raw = self._blocks[int(index)].get("agent_log", "")
+        except (ValueError, IndexError):
+            return
+        text = subagent.render_log(raw)
+        if not text:
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Agent's work")
+        dialog.resize(760, 560)
+        layout = QVBoxLayout(dialog)
+        view = QTextBrowser()
+        view.document().setDefaultStyleSheet(themes.current().richtext_css())
+        view.setHtml(render_markdown(text))
+        close = QPushButton("Close")
+        close.clicked.connect(dialog.accept)
+        layout.addWidget(view, 1)
+        layout.addWidget(close)
+        dialog.exec()
 
     # --- input ---
 
@@ -279,7 +306,7 @@ class ChatView(QWidget):
         return {
             "role": m["role"], "content": m["content"], "reasoning": get("reasoning"), "live": False,
             "tool_calls": json.loads(calls) if calls else [], "tool_name": get("tool_name"),
-            "images": images.decode_paths(get("images")),
+            "images": images.decode_paths(get("images")), "agent_log": get("agent_log"),
         }
 
     def append_message(self, role: str, content: str, reasoning: str = "", image_paths=None):
@@ -332,9 +359,13 @@ class ChatView(QWidget):
             self._dirty = False
             self._render_live()
 
-    def _block_html(self, b: dict) -> str:
+    def _block_html(self, b: dict, index: int = -1) -> str:
         if b["role"] == "tool":
-            return self._tool_result_html(b)
+            html = self._tool_result_html(b)
+            if b.get("agent_log") and index >= 0:
+                html += (f'<p><a href="{AGENT_LOG_HREF}{index}" style="color:{themes.current().tool}">'
+                         "Agent's work…</a></p>")
+            return html
         th = themes.current()
         color = {"user": th.user, "assistant": th.assistant}.get(b["role"], th.system)
         label = ROLE_LABELS.get(b["role"], b["role"])
@@ -403,7 +434,7 @@ class ChatView(QWidget):
         live = self._live_block()
         static = self._blocks[:-1] if live else self._blocks
         # Qt turns a trailing line break in the markup into an extra space at the end of the last paragraph
-        self.history.setHtml("".join(self._block_html(b) for b in static).rstrip())
+        self.history.setHtml("".join(self._block_html(b, i) for i, b in enumerate(static)).rstrip())
         self._live_pos = None
         if live is not None:
             cursor = QTextCursor(self.history.document())

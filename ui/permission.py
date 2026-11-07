@@ -60,13 +60,15 @@ class PermissionBroker(QObject):
         self._lock = threading.Lock()
         self.asked.connect(self._on_asked)
 
-    def ask(self, tool_id: str, arguments: dict, cancel: threading.Event | None = None) -> bool:
-        """From the worker thread: True if the user allowed it. Cancelling generation or a timeout means refusal."""
+    def ask(self, tool_id: str, arguments: dict, cancel: threading.Event | None = None, who: str = "") -> bool:
+        """From the worker thread: True if the user allowed it. Cancelling generation or a timeout means refusal.
+        who: the agent that makes the call (a subagent), shown before the tool name."""
         rid = next(self._ids)
         event = threading.Event()
         with self._lock:
             self._pending[rid] = [event, False]
-        self.asked.emit(rid, tool_id, format_arguments(tool_id, arguments))
+        title = f"Agent {who} → {tool_id}" if who else tool_id
+        self.asked.emit(rid, title, format_arguments(tool_id, arguments))
         waited = 0.0
         while not event.wait(0.2):
             waited += 0.2

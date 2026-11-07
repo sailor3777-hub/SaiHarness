@@ -158,6 +158,17 @@ Preparation: the Web tab, tools enabled. Any small documentation site works for 
 - [ ] **S4 SearXNG off.** Clear the field and ask the same: `ERROR: The SearXNG address is not set…`, the model honestly says there is no internet search. The address is read again on every call, no restart needed.
 - [ ] **W10 Closing during a crawl.** Close the window while crawling: it closes without hanging (up to 8 seconds), no extra `python`/`QtWebEngineProcess` processes remain.
 
+## G3. Agents (delegate)
+
+Preparation: two profiles on Model Builder, for example "Main" (the chat) and "Coder" (system prompt about writing and checking PowerShell scripts, the "As an agent" field: `Writes and tests PowerShell scripts`). If possible put Coder on another machine (another connection) or use the same model: another model on the same LM Studio is reloaded on every call. Back up `data\` first.
+
+- [ ] **A1 Choosing agents.** Tools tab, "Agents:" → the list of profiles with checkboxes; tick Coder: the button shows `Coder`, the line under the tree says `agents: 1` and the request estimate grows. The menu stays open while ticking. A profile without a connection gets a warning under the button.
+- [ ] **A2 Per chat.** The choice is kept per chat and after a restart; a new chat starts without agents (a draft's choice moves into the first chat).
+- [ ] **A3 Delegating.** Enable `shell_run` (and the Files group) in the chat and write "ask the coder to write a PowerShell script that lists the 5 largest files in <folder> and saves it as top5.ps1 there". The chat shows `▸ delegate(...)`, the status line shows `Coder: step N/M · …` while the agent works, confirmations say `Agent Coder → toolbox.shell_run`. Then `◂ delegate` with `Result from agent Coder:` and the link "Agent's work…".
+- [ ] **A4 The agent's work.** Click "Agent's work…": a window with the task, the steps with calls and results, and the answer. The Request window of the chat does not contain these steps, only the task and the result.
+- [ ] **A5 Stop.** Press "Stop" while the agent works: both the agent and the reply stop, the chat says `Stopped`.
+- [ ] **A6 A deleted agent.** Delete the Coder profile: it disappears from the button and from the request; the old chat still opens.
+
 ## H. Data
 
 - [ ] **H1** After a restart these are kept: chats and history, connections, profiles, the roots on the Files tab, the selection of files and tools per chat, tool permissions.

@@ -47,6 +47,11 @@ CREATE TABLE IF NOT EXISTS chat_tools (
     tool_id TEXT NOT NULL,
     PRIMARY KEY (chat_id, tool_id)
 );
+CREATE TABLE IF NOT EXISTS chat_agents (
+    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    profile TEXT NOT NULL,
+    PRIMARY KEY (chat_id, profile)
+);
 CREATE TABLE IF NOT EXISTS tool_policy (
     tool_id TEXT PRIMARY KEY,
     mode TEXT NOT NULL CHECK (mode IN ('auto', 'ask', 'deny'))
@@ -73,12 +78,14 @@ def connect() -> sqlite3.Connection:
     _ensure_column(conn, "model_profiles", "connection", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "model_profiles", "max_steps", f"INTEGER NOT NULL DEFAULT {DEFAULT_MAX_STEPS}")
     _ensure_column(conn, "model_profiles", "memory_rules", "TEXT NOT NULL DEFAULT ''")  # rules for long-term memory (empty: core.memory.DEFAULT_RULES is used)
+    _ensure_column(conn, "model_profiles", "agent_description", "TEXT NOT NULL DEFAULT ''")  # a line for the agents catalog (delegate)
     _ensure_column(conn, "chats", "profile", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "messages", "reasoning", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "messages", "tool_calls", "TEXT NOT NULL DEFAULT ''")    # JSON of the calls in the model's reply
     _ensure_column(conn, "messages", "tool_call_id", "TEXT NOT NULL DEFAULT ''")  # for role='tool'
     _ensure_column(conn, "messages", "tool_name", "TEXT NOT NULL DEFAULT ''")     # for role='tool'
     _ensure_column(conn, "messages", "images", "TEXT NOT NULL DEFAULT ''")        # JSON list of paths of attached images
+    _ensure_column(conn, "messages", "agent_log", "TEXT NOT NULL DEFAULT ''")     # role='tool' of delegate: JSON of the subagent's work (not sent to the model)
     return conn
 
 
@@ -204,16 +211,17 @@ def add_message(chat_id: int, role: str, content: str, reasoning: str = "", imag
 def add_messages(chat_id: int, messages: list[dict]) -> list[int]:
     """Adds messages in one transaction (a tool call and its results are saved only together).
 
-    Keys: role, content, and the optional reasoning, tool_calls (JSON string), tool_call_id, tool_name, images (JSON string).
+    Keys: role, content, and the optional reasoning, tool_calls (JSON string), tool_call_id, tool_name, images (JSON string),
+    agent_log (JSON string).
     """
     ids = []
     with connect() as conn:
         for m in messages:
             ids.append(conn.execute(
-                "INSERT INTO messages(chat_id, role, content, reasoning, tool_calls, tool_call_id, tool_name, images)"
-                " VALUES(?,?,?,?,?,?,?,?)",
+                "INSERT INTO messages(chat_id, role, content, reasoning, tool_calls, tool_call_id, tool_name, images, agent_log)"
+                " VALUES(?,?,?,?,?,?,?,?,?)",
                 (chat_id, m["role"], m["content"], m.get("reasoning", ""), m.get("tool_calls", ""),
-                 m.get("tool_call_id", ""), m.get("tool_name", ""), m.get("images", "")),
+                 m.get("tool_call_id", ""), m.get("tool_name", ""), m.get("images", ""), m.get("agent_log", "")),
             ).lastrowid)
         conn.execute("UPDATE chats SET updated_at=datetime('now') WHERE id=?", (chat_id,))
     return ids
@@ -229,6 +237,18 @@ def save_chat_tools(chat_id: int, tool_ids):
     with connect() as conn:
         conn.execute("DELETE FROM chat_tools WHERE chat_id=?", (chat_id,))
         conn.executemany("INSERT INTO chat_tools(chat_id, tool_id) VALUES(?,?)", [(chat_id, t) for t in tool_ids])
+
+
+def load_chat_agents(chat_id: int) -> set[str]:
+    """Names of the profiles the chat's model may delegate to (a deleted profile may still be listed: callers skip it)."""
+    with connect() as conn:
+        return {r["profile"] for r in conn.execute("SELECT profile FROM chat_agents WHERE chat_id=?", (chat_id,))}
+
+
+def save_chat_agents(chat_id: int, profiles):
+    with connect() as conn:
+        conn.execute("DELETE FROM chat_agents WHERE chat_id=?", (chat_id,))
+        conn.executemany("INSERT INTO chat_agents(chat_id, profile) VALUES(?,?)", [(chat_id, p) for p in profiles])
 
 
 def load_tool_policies() -> dict[str, str]:
@@ -270,17 +290,21 @@ def list_messages(chat_id: int) -> list[sqlite3.Row]:
 
 
 def save_profile(name, connection, base_model, system_prompt, temperature, max_tokens, memory,
-                 max_steps=DEFAULT_MAX_STEPS, memory_rules=""):
+                 max_steps=DEFAULT_MAX_STEPS, memory_rules="", agent_description: str | None = None):
+    """agent_description=None keeps the stored description (a new profile gets an empty one)."""
+    keep = agent_description is None
     with connect() as conn:
         conn.execute(
             "INSERT INTO model_profiles(name, connection, base_model, system_prompt, temperature, max_tokens, memory,"
-            " max_steps, memory_rules) VALUES(?,?,?,?,?,?,?,?,?)"
+            " max_steps, memory_rules, agent_description) VALUES(?,?,?,?,?,?,?,?,?,?)"
             " ON CONFLICT(name) DO UPDATE SET connection=excluded.connection,"
             " base_model=excluded.base_model,"
             " system_prompt=excluded.system_prompt, temperature=excluded.temperature,"
             " max_tokens=excluded.max_tokens, memory=excluded.memory, max_steps=excluded.max_steps,"
-            " memory_rules=excluded.memory_rules",
-            (name, connection, base_model, system_prompt, temperature, max_tokens, memory, max_steps, memory_rules),
+            " memory_rules=excluded.memory_rules,"
+            " agent_description=CASE WHEN ? THEN agent_description ELSE excluded.agent_description END",
+            (name, connection, base_model, system_prompt, temperature, max_tokens, memory, max_steps, memory_rules,
+             agent_description or "", keep),
         )
 
 

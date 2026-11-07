@@ -3,21 +3,9 @@ import threading
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
-from core import diag, llm
-from core.context_builder import estimate_request_tokens
+from core import llm
+from core.agent_loop import CONTEXT_SAFETY, LIMIT_NUDGE, STUCK_NUDGE, AgentLoop  # noqa: F401 (re-exported for main_window and tests)
 from core.db import DEFAULT_MAX_STEPS
-
-CONTEXT_SAFETY = 1.15  # margin for token estimate error (on average it underestimates code by 15-20%)
-
-
-def _fmt(n: int) -> str:
-    return f"{n:,}".replace(",", " ")
-
-
-LIMIT_NUDGE = ("You have used up the tool call limit and cannot call tools any more. "
-               "Reply to the user in plain text: what has been done and what is still left to do.")
-STUCK_NUDGE = ("The tool {tool} returned the same error several times in a row, so tools are now disabled. "
-               "Reply to the user in plain text: what worked, what did not, and why.")
 
 
 class _CallThread(QThread):
@@ -176,6 +164,7 @@ class ContextLimitRequest(AsyncCall):
 class ChatStreamer(QThread):
     """Reads the model's streamed reply in the background and passes chunks to the UI through signals.
 
+    The loop itself is core.agent_loop.AgentLoop; this class turns its callbacks into signals.
     Every signal carries stream_id so that the UI can ignore stale streams.
     """
 
@@ -185,6 +174,7 @@ class ChatStreamer(QThread):
     usage = Signal(int, int, int, int)  # stream_id, request tokens counted by the server, reply tokens, our request estimate
     failed = Signal(int, str)
     completed = Signal(int)
+    progress = Signal(int, str)  # stream_id, a status line from a subagent working inside delegate
 
     MAX_STEPS = DEFAULT_MAX_STEPS  # the default; it is configurable per model profile
 
@@ -194,17 +184,34 @@ class ChatStreamer(QThread):
                  context_limit: int | None = None, scale: float = 1.0, prepare=None):
         super().__init__()
         self.stream_id = stream_id
-        self._args = (base_url, api_key, model, messages, temperature, max_tokens)
-        self._tools, self._router = tools, router
-        self.max_steps = max_steps or self.MAX_STEPS  # how many "request, tool calls" rounds are allowed per reply
-        # protection against overflowing the model's context: the limit is known only for a loaded model
-        self.context_limit = context_limit
-        self.reserve = min(max_tokens, context_limit // 4) if context_limit else 0  # room for the reply
-        self.scale = scale  # correction of our estimate based on the server's measurements
+        self._messages = messages
         self._cancel = threading.Event()
+        sid = stream_id
+        self.agent = AgentLoop(
+            base_url, api_key, model, temperature, max_tokens, tools=tools, router=router,
+            max_steps=max_steps or self.MAX_STEPS, context_limit=context_limit, scale=scale, cancel=self._cancel,
+            on_delta=lambda kind, text: self.delta.emit(sid, kind, text),
+            on_tool_running=lambda name, args: self.tool_running.emit(sid, name, args),
+            on_round=lambda assistant, results: self.tool_round.emit(sid, assistant, results),
+            on_usage=lambda prompt, completion, raw: self.usage.emit(sid, prompt, completion, raw),
+            log_tag=f"stream {stream_id}",
+        )
         # prepare(messages, notify) -> messages: preparing the request in the thread before the first call to the model
         # (images: data URLs or a description from the vision model, which can take minutes)
         self._prepare = prepare
+
+    # the context check lives in AgentLoop; these names stay for the callers and tests
+    max_steps = property(lambda self: self.agent.max_steps)
+    context_limit = property(lambda self: self.agent.context_limit)
+    reserve = property(lambda self: self.agent.reserve)
+    # main_window corrects the scale between rounds from the server's measurements
+    scale = property(lambda self: self.agent.scale, lambda self, value: setattr(self.agent, "scale", value))
+
+    def _estimate(self, messages: list, tools: list | None) -> tuple[int, int]:
+        return self.agent.estimate(messages, tools)
+
+    def _fits(self, messages: list, tools: list | None) -> bool:
+        return self.agent.fits(messages, tools)
 
     def cancel(self):
         self._cancel.set()
@@ -215,111 +222,16 @@ class ChatStreamer(QThread):
 
     def run(self):
         try:
+            messages = list(self._messages)
             if self._prepare is not None:
-                prepared = self._prepare(
-                    list(self._args[3]), lambda text: self.delta.emit(self.stream_id, "notice", text))
-                self._args = self._args[:3] + (prepared,) + self._args[4:]
+                messages = self._prepare(messages, lambda text: self.delta.emit(self.stream_id, "notice", text))
             if self._cancel.is_set():
                 return
-            self._loop()
+            if self.agent.run(messages):
+                self.completed.emit(self.stream_id)
         except llm.LLMError as e:
             if not self._cancel.is_set():
                 self.failed.emit(self.stream_id, str(e))
         except Exception as e:  # the thread must not die silently
             if not self._cancel.is_set():
                 self.failed.emit(self.stream_id, f"Error: {e}")
-
-    def _estimate(self, messages: list, tools: list | None) -> tuple[int, int]:
-        """(raw request estimate, estimate with the correction and the safety margin)."""
-        raw = estimate_request_tokens(messages, tools)
-        return raw, int(raw * self.scale * CONTEXT_SAFETY)
-
-    def _fits(self, messages: list, tools: list | None) -> bool:
-        return not self.context_limit or self._estimate(messages, tools)[1] + self.reserve <= self.context_limit
-
-    def _overflow_error(self, messages: list, tools: list | None) -> llm.LLMError:
-        estimated = self._estimate(messages, tools)[1]
-        return llm.LLMError(
-            f"The model's context is full: the request ≈{_fmt(estimated)} tok. and a reply of up to {_fmt(self.reserve)} do not fit "
-            f"into {_fmt(self.context_limit)}. Start a new chat or remove files and tools."
-        )
-
-    def _request(self, messages: list, tools: list | None):
-        """One request to the model: context check, a log entry, real token measurements from the server."""
-        base_url, api_key, model, _, temperature, max_tokens = self._args
-        raw, estimated = self._estimate(messages, tools)
-        diag.note(f"[req] stream {self.stream_id} request≈{estimated} tok. (raw estimate {raw}) limit={self.context_limit} "
-                  f"{diag.memory_summary()}")
-        if not self._fits(messages, tools):
-            raise self._overflow_error(messages, tools)
-        for kind, payload in llm.stream_chat(
-            base_url, api_key, model, messages, temperature, max_tokens, cancel=self._cancel, tools=tools,
-        ):
-            if kind == "usage":
-                self.usage.emit(self.stream_id, payload["prompt_tokens"], payload["completion_tokens"], raw)
-                continue
-            yield kind, payload
-
-    def _loop(self):
-        messages = list(self._args[3])
-        use_tools = bool(self._tools and self._router)
-        stuck = None
-        for _step in range(self.max_steps):
-            content = reasoning = ""
-            calls = None
-            for kind, payload in self._request(messages, self._tools if use_tools else None):
-                if self._cancel.is_set():
-                    return
-                if kind == "tool_calls":
-                    calls = payload
-                    continue
-                if kind == "content":
-                    content += payload
-                elif kind == "reasoning":
-                    reasoning += payload
-                self.delta.emit(self.stream_id, kind, payload)
-            if self._cancel.is_set():
-                return
-            if not calls or not use_tools:
-                self.completed.emit(self.stream_id)
-                return
-            api_calls = [
-                {"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": c["arguments"]}}
-                for c in calls
-            ]
-            results = []
-            for c in calls:
-                if self._cancel.is_set():
-                    return
-                self.tool_running.emit(self.stream_id, c["name"], c["arguments"])
-                results.append({
-                    "tool_call_id": c["id"], "name": c["name"],
-                    "content": self._router.handle(c["name"], c["arguments"]),
-                })
-            if self._cancel.is_set():
-                return  # the round is not finished: calls without results are not saved
-            messages.append({"role": "assistant", "content": content, "tool_calls": api_calls})
-            messages += [{"role": "tool", "tool_call_id": r["tool_call_id"], "content": r["content"]} for r in results]
-            self.tool_round.emit(
-                self.stream_id, {"content": content, "reasoning": reasoning, "tool_calls": api_calls}, results
-            )
-            stuck = getattr(self._router, "stuck", None)  # a tool blocked because of a repeating error
-            if stuck:
-                break
-        # The step limit (or a loop on a broken tool). Without a final word the user would be left
-        # with nothing, so the model is asked to sum up without tools. This message does not go into the chat history.
-        # (Context overflow is caught by _request: it stops the reply with a clear error before any request
-        # that would not fit.)
-        if stuck:
-            self.delta.emit(self.stream_id, "notice", f"Tool {stuck} keeps returning the same error, continuing without tools")
-            messages.append({"role": "user", "content": STUCK_NUDGE.format(tool=stuck)})
-        else:
-            self.delta.emit(self.stream_id, "notice", f"Reached the tool step limit ({self.max_steps})")
-            messages.append({"role": "user", "content": LIMIT_NUDGE})
-        for kind, payload in self._request(messages, None):
-            if self._cancel.is_set():
-                return
-            if kind in ("content", "reasoning", "notice"):
-                self.delta.emit(self.stream_id, kind, payload)
-        if not self._cancel.is_set():
-            self.completed.emit(self.stream_id)
