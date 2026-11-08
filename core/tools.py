@@ -70,6 +70,7 @@ TOOL_GROUPS: dict[str, tuple[str, ...]] = {
     "Shell": ("shell_run", "shell_output", "shell_stop"),
     "Office documents": ("docx_write", "xlsx_write"),
     "Images": ("vision_describe", "image_generate"),
+    "Weather": ("get_weather",),
     "Utilities": ("calc", "time_now", "notes_write"),
 }
 OTHER_GROUP = "Other"

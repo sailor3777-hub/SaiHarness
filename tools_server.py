@@ -348,6 +348,18 @@ def web_search_internet(query: str, max_results: int = 5, category: str = "gener
     return "\n".join(lines)
 
 
+@tool("Current weather and a daily forecast for a place: location is a city name (\"Berlin\", \"Paris, France\" to "
+      "pick the country) or coordinates \"55.75, 37.62\"; days is 1-16 (default 3). Metric units: °C, m/s, mm. "
+      "Goes online (Open-Meteo); use it for any question about weather, temperature, rain, snow or wind.",
+      ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True))
+def get_weather(location: str, days: int = 3) -> str:
+    from core import weather
+    try:
+        return weather.get_weather(location, days)
+    except (weather.WeatherError, ValueError) as e:
+        return ERROR_PREFIX + f"{e}"
+
+
 @tool("Downloads a page by address (http/https) and returns its readable text and links. A long page comes "
       "in chunks of char_limit characters (default 9000, at most 10500): the end of a chunk says which offset to read "
       "from next. Pages drawn by JavaScript are rendered automatically. Goes online; local and private addresses are blocked.",

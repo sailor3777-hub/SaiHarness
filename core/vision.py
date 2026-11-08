@@ -115,6 +115,9 @@ def describe_cached(cfg: VisionConfig, image: Path, question: str = "") -> str:
 
 def describe(cfg: VisionConfig, image: Path, question: str = "", transport=None, timeout: float = TIMEOUT) -> str:
     """One request to the vision model; returns its answer. The model's reasoning is discarded."""
+    from core import llm
+    if llm.is_anthropic(cfg.base_url):
+        return _describe_anthropic(cfg, image, question)
     body = {
         "model": cfg.model,
         "messages": [
@@ -153,3 +156,28 @@ def describe(cfg: VisionConfig, image: Path, question: str = "", transport=None,
         why = " The reply was cut off by the token limit: the reasoning used it up." if choice.get("finish_reason") == "length" else ""
         raise VisionError(f"Vision model \"{cfg.model}\" returned empty text.{why}")
     return text
+
+
+def _describe_anthropic(cfg: VisionConfig, image: Path, question: str) -> str:
+    """The same request to a Claude model through the Anthropic Messages API (core/anthropic_api.py)."""
+    from core import llm
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": [
+            {"type": "text", "text": question.strip() or DEFAULT_QUESTION},
+            {"type": "image_url", "image_url": {"url": image_data_url(image)}},
+        ]},
+    ]
+    text, cut = "", False
+    try:
+        for kind, payload in llm.stream_chat(cfg.base_url, cfg.api_key, cfg.model, messages, cfg.temperature, cfg.max_tokens):
+            if kind == "content":
+                text += payload
+            elif kind == "notice" and payload == llm.LENGTH_NOTICE:
+                cut = True
+    except llm.LLMError as e:
+        raise VisionError(f"Vision model \"{cfg.model}\": {e}") from None
+    if not text.strip():
+        why = " The reply was cut off by the token limit: the reasoning used it up." if cut else ""
+        raise VisionError(f"Vision model \"{cfg.model}\" returned empty text.{why}")
+    return text.strip()

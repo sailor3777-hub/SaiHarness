@@ -1,4 +1,5 @@
-﻿cryptography==50.0.2
+﻿anthropic==2.6.0
+cryptography==50.0.2
 httpx==0.28.1
 markdown-it-py==4.2.0
 mcp==2.3.0

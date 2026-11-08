@@ -1,6 +1,7 @@
 from urllib.parse import urlsplit
 
-KINDS = {"LM Studio": 1234}  # connection type -> default port
+KINDS = {"LM Studio": 1234, "Anthropic": 443}  # connection type -> default port (443: https by default)
+DEFAULT_URLS = {"Anthropic": "https://api.anthropic.com"}  # filled into an empty address field
 
 
 def normalize_url(raw: str, default_port: int = 1234) -> str:
@@ -10,14 +11,16 @@ def normalize_url(raw: str, default_port: int = 1234) -> str:
     'localhost:1234'           -> http://localhost:1234/v1
     'http://host:8080'         -> http://host:8080/v1
     'https://host/custom/v1/'  -> https://host/custom/v1
-    The default port is added only if no scheme is given and there is no port.
+    'api.anthropic.com' (443)  -> https://api.anthropic.com/v1
+    The default port is added only if no scheme is given and there is no port; port 443 means https without a port.
     Raises ValueError if the address cannot be parsed.
     """
     raw = raw.strip()
     if not raw:
         raise ValueError("Empty address")
     has_scheme = "://" in raw
-    parts = urlsplit(raw if has_scheme else f"http://{raw}")
+    secure = default_port == 443
+    parts = urlsplit(raw if has_scheme else f"{'https' if secure else 'http'}://{raw}")
     if parts.scheme not in ("http", "https"):
         raise ValueError("Only http and https are supported")
     if not parts.hostname:
@@ -26,7 +29,7 @@ def normalize_url(raw: str, default_port: int = 1234) -> str:
         port = parts.port
     except ValueError:
         raise ValueError("Invalid port") from None
-    if port is None and not has_scheme:
+    if port is None and not has_scheme and not secure:
         port = default_port
     host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
     netloc = f"{host}:{port}" if port else host

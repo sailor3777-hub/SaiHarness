@@ -65,8 +65,12 @@ class AsyncCall(QObject):
         t.finished.connect(self._reap)
         self._threads.add(t)
         self._set_busy(True)
-        self._watchdog.start(self.TIMEOUT_MS)
+        self._watchdog.start(self.timeout_ms(args))
         t.start()
+
+    def timeout_ms(self, args) -> int:
+        """The watchdog for this call; args[0] is the server address for the model requests."""
+        return self.TIMEOUT_MS
 
     def cancel(self):
         """Give up on the expected result (it will be ignored)."""
@@ -91,7 +95,7 @@ class AsyncCall(QObject):
     def _on_timeout(self):
         self._seq += 1  # a late result of this call is ignored
         self._settle()
-        self.failed.emit(self.TIMEOUT_TEXT.format(seconds=self.TIMEOUT_MS / 1000))
+        self.failed.emit(self.TIMEOUT_TEXT.format(seconds=self._watchdog.interval() / 1000))
 
     def _settle(self):
         self._watchdog.stop()
@@ -145,8 +149,14 @@ class CrawlThread(QThread):
                 conn.close()
 
 
+ANTHROPIC_TIMEOUT_MS = 20000  # a cloud server, plus loading the SDK on the first call
+
+
 class ModelListRequest(AsyncCall):
     """start(url, api_key) -> succeeded(list[str]) with the server's list of models."""
+
+    def timeout_ms(self, args) -> int:
+        return ANTHROPIC_TIMEOUT_MS if args and llm.is_anthropic(args[0]) else self.TIMEOUT_MS
 
     def __init__(self, parent=None):
         super().__init__(llm.list_models, parent)
@@ -156,6 +166,9 @@ class ContextLimitRequest(AsyncCall):
     """start(url, api_key, model) -> succeeded((limit | None, model_loaded, max context | None))."""
 
     TIMEOUT_MS = 5000
+
+    def timeout_ms(self, args) -> int:
+        return ANTHROPIC_TIMEOUT_MS if args and llm.is_anthropic(args[0]) else self.TIMEOUT_MS
 
     def __init__(self, parent=None):
         super().__init__(llm.get_context_info, parent)

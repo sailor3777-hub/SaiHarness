@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
 )
 
 from core import db
-from core.connection import KINDS, normalize_url
+from core.connection import DEFAULT_URLS, KINDS, normalize_url
 from worker import ModelListRequest
 
 
@@ -67,9 +67,20 @@ class ConnectionPanel(QWidget):
         self.check_req.succeeded.connect(self._on_check_ok)
         self.check_req.failed.connect(lambda msg: self.status.setText(f"✗ {msg}"))
         self.check_req.busy_changed.connect(self._on_check_busy)
+        self.kind.currentTextChanged.connect(self._on_kind)
         self.list.itemDoubleClicked.connect(lambda _item: self._edit())
         self.list.currentItemChanged.connect(lambda *_: self._update_buttons())
         self.reload()
+
+    def _on_kind(self, kind: str):
+        """Anthropic: the official address goes into an empty field, the key is required."""
+        if kind == "Anthropic":
+            from core import anthropic_api
+            anthropic_api.preload()  # the SDK loads while the key is being typed, not during Check
+        default = DEFAULT_URLS.get(kind)
+        if default and not self.url.text().strip():
+            self.url.setText(default)
+        self.api_key.setPlaceholderText("API key (required)" if kind == "Anthropic" else "API key (optional)")
 
     def reload(self, select: str | None = None):
         self._rows = {r["name"]: r for r in db.list_connections()}
@@ -100,6 +111,7 @@ class ConnectionPanel(QWidget):
         self.url.clear()
         self.api_key.clear()
         self.status.setText("")
+        self._on_kind(self.kind.currentText())
         self.list.clearSelection()
         self.list.setCurrentItem(None)
 

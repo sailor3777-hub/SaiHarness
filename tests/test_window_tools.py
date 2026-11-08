@@ -51,7 +51,7 @@ def leaves(item):
 groups = {top.child(i).text(0).split(" (")[0]: top.child(i) for i in range(top.childCount())}
 check("tree: a server with tool groups from TOOL_GROUPS", list(groups) == list(TOOL_GROUPS) and "toolbox" in top.text(0)
       and all(g.data(0, KIND_ROLE) == "group" for g in groups.values()), list(groups))
-check("tree: 23 tools, each in its group", len(leaves(top)) == 23
+check("tree: 24 tools, each in its group", len(leaves(top)) == 24
       and all(c.text(0).split()[0] in TOOL_GROUPS[name] for name, g in groups.items() for c in leaves(g)))
 names = {c.text(0) for c in leaves(top)}
 check("permission tag on a write tool", any(n.startswith("notes_write") and "[asks]" in n for n in names) and "calc" in names, names)
@@ -82,8 +82,8 @@ b.name.setText("p"); b.base_model.setCurrentText("fake-model"); b.max_tokens.set
 
 # enable the whole server BEFORE the chat is created (draft)
 top.setCheckState(0, Qt.Checked)
-check("the server checkbox enables all tools", len(tp.enabled) == 23 and tp.enabled == {t.id for t in tp.tools} and w.chat_id is None)
-check("info: catalog tokens and savings", "Enabled: 23" in tp.info.text() and "Full schemas would take" in tp.info.text() and tp.prompt_tokens() > 0, tp.info.text())
+check("the server checkbox enables all tools", len(tp.enabled) == 24 and tp.enabled == {t.id for t in tp.tools} and w.chat_id is None)
+check("info: catalog tokens and savings", "Enabled: 24" in tp.info.text() and "Full schemas would take" in tp.info.text() and tp.prompt_tokens() > 0, tp.info.text())
 extra_tokens = w.files_panel._extra_tokens
 check("\"whole request\" includes the catalog", extra_tokens >= tp.prompt_tokens() > 0)
 
@@ -210,7 +210,7 @@ check("without tools: no tools and no catalog in the request", "tools" not in lm
       and w.last_requests[chat2]["tools"] == [])
 for i in range(w.chat_list.list.count()):
     if w.chat_list.list.item(i).data(0x100) != chat2: w.chat_list.list.setCurrentRow(i)
-check("back to the first chat: the tool set is restored", len(tp.enabled) == 22 and "toolbox.time_now" not in tp.enabled
+check("back to the first chat: the tool set is restored", len(tp.enabled) == 23 and "toolbox.time_now" not in tp.enabled
       and tp.tree.topLevelItem(0).checkState(0) == Qt.PartiallyChecked)
 check("chat history with calls is shown after reloading from the DB", "tool search" in v.history.toPlainText() and "◂ toolbox.calc" in v.history.toPlainText())
 
@@ -225,7 +225,7 @@ texts = [tp.tree.topLevelItem(i).text(0) for i in range(tp.tree.topLevelItemCoun
 check("in the tree: working, broken, disabled", any(t.startswith("●") for t in texts) and any(t.startswith("✗ broken") for t in texts) and any(t.startswith("○ off") for t in texts), texts)
 broken = next(tp.tree.topLevelItem(i) for i in range(tp.tree.topLevelItemCount()) if tp.tree.topLevelItem(i).text(0).startswith("✗"))
 check("the broken one shows the error text", broken.childCount() == 1 and broken.child(0).text(0), broken.child(0).text(0))
-check("enabled tools survived the restart", len(tp.enabled) == 22 and len(tp.enabled_tools()) == 22)
+check("enabled tools survived the restart", len(tp.enabled) == 23 and len(tp.enabled_tools()) == 23)
 (tmp / "mcp.json").write_text("{ this is not json", encoding="utf-8"); tp.reconnect_btn.click(); wait(lambda: not tp.connect_req.busy)
 check("broken config: a clear error, the app is alive", "Could not connect the servers" in tp.info.text(), tp.info.text())
 

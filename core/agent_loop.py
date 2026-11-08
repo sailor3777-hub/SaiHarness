@@ -97,12 +97,15 @@ class AgentLoop:
         stuck = None
         for _step in range(self.max_steps):
             self.content = self.reasoning = ""
-            calls = None
+            calls = blocks = None
             for kind, payload in self._request(messages, self.tools if use_tools else None):
                 if self.cancel.is_set():
                     return False
                 if kind == "tool_calls":
                     calls = payload
+                    continue
+                if kind == llm.PROVIDER_BLOCKS:  # Anthropic: the turn with its thinking, sent back unchanged
+                    blocks = payload
                     continue
                 if kind == "content":
                     self.content += payload
@@ -128,7 +131,10 @@ class AgentLoop:
                 })
             if self.cancel.is_set():
                 return False  # the round is not finished: calls without results are not saved
-            messages.append({"role": "assistant", "content": self.content, "tool_calls": api_calls})
+            assistant = {"role": "assistant", "content": self.content, "tool_calls": api_calls}
+            if blocks:
+                assistant[llm.PROVIDER_BLOCKS] = blocks
+            messages.append(assistant)
             messages += [{"role": "tool", "tool_call_id": r["tool_call_id"], "content": r["content"]} for r in results]
             self.on_round({"content": self.content, "reasoning": self.reasoning, "tool_calls": api_calls}, results)
             stuck = getattr(self.router, "stuck", None)  # a tool blocked because of a repeating error

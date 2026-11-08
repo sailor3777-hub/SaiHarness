@@ -5,6 +5,9 @@ from typing import Iterator
 
 import httpx
 
+from core import anthropic_api
+from core.anthropic_api import PROVIDER_BLOCKS, is_anthropic
+
 
 LENGTH_NOTICE = "Max tokens limit reached, the reply was cut off"
 
@@ -41,7 +44,10 @@ def get_context_info(base_url: str, api_key: str, model: str) -> tuple[int | Non
     The working limit is known only for a loaded model (loaded_context_length): when loading
     "on the fly", LM Studio may set a context much smaller than the model's maximum.
     Any failure gives (None, False, None): estimating the limit must not break anything.
+    For Anthropic it is the model's context window from the Models API.
     """
+    if is_anthropic(base_url):
+        return anthropic_api.context_info(base_url, api_key, model)
     root = base_url.rstrip("/")
     root = root[:-3] if root.endswith("/v1") else root
     try:
@@ -62,6 +68,8 @@ def get_context_info(base_url: str, api_key: str, model: str) -> tuple[int | Non
 
 def model_type(base_url: str, api_key: str, model: str, timeout: float = 4.0) -> str | None:
     """Model type in LM Studio: 'vlm' (sees images), 'llm' and so on. Any failure or a different server gives None."""
+    if is_anthropic(base_url):
+        return "vlm"  # Claude models see images
     root = base_url.rstrip("/")
     root = root[:-3] if root.endswith("/v1") else root
     try:
@@ -114,7 +122,18 @@ def stream_chat(
     Warnings are yielded as ('notice', text): the server answered with a different model than requested
     (LM Studio substitutes the loaded one for an unknown name), or the reply was cut off by the token limit
     (for reasoning models the reasoning itself uses up the limit).
+
+    An address on anthropic.com goes to the Anthropic Messages API (core/anthropic_api.py); then a reply with tool
+    calls also yields (PROVIDER_BLOCKS, blocks) before 'tool_calls': the turn as it must be sent back.
     """
+    if is_anthropic(base_url):
+        try:
+            yield from anthropic_api.stream_chat(base_url, api_key, model, messages, max_tokens, cancel, tools,
+                                                 length_notice=LENGTH_NOTICE)
+        except anthropic_api.AnthropicError as e:
+            raise LLMError(str(e)) from None
+        return
+    messages = [{k: v for k, v in m.items() if k != PROVIDER_BLOCKS} for m in messages]
     body = {
         "model": model,
         "messages": messages,
@@ -189,7 +208,12 @@ def _headers(api_key: str) -> dict:
 
 
 def list_models(base_url: str, api_key: str = "", timeout: float = 5.0) -> list[str]:
-    """Returns the model ids from an OpenAI-compatible server (GET {base_url}/models)."""
+    """Returns the model ids from an OpenAI-compatible server (GET {base_url}/models) or from Anthropic."""
+    if is_anthropic(base_url):
+        try:
+            return anthropic_api.list_models(base_url, api_key)
+        except anthropic_api.AnthropicError as e:
+            raise LLMError(str(e)) from None
     try:
         r = httpx.get(
             f"{base_url}/models", headers=_headers(api_key), timeout=timeout, trust_env=False
