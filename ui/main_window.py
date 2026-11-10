@@ -6,7 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QMainWindow, QSplitter
 
-from core import db, images, llm, memory, subagent, vision
+from core import db, imagegen, images, llm, memory, subagent, vision
 from core.agent import hosttools
 from core.context_builder import build_messages, estimate_request_tokens
 from core.files import Selection
@@ -17,6 +17,7 @@ from ui import themes
 from ui.context_panel import ContextPanel
 from ui.permission import PermissionBroker
 from ui.request_dialog import RequestDialog
+from ui.telegram_bridge import TelegramBridge
 from worker import CONTEXT_SAFETY, ChatStreamer, ContextLimitRequest
 
 TITLE_MAX = 40
@@ -103,6 +104,9 @@ class MainWindow(QMainWindow):
         self.selector.user_changed.connect(self._remember_choice)
         self.selector.profiles_changed.connect(self._refresh_lock)
 
+        self.telegram = TelegramBridge(self)
+        QTimer.singleShot(0, self.context.telegram_panel.autostart_if_set)
+
         self._free_choice = self.selector.profile.currentText() or None
         self.chat_list.reload()
         first = self.chat_list.list.item(0)
@@ -149,6 +153,12 @@ class MainWindow(QMainWindow):
                 self.chat_view.begin_live(self.stream["reasoning"], self.stream["content"])
         self._refresh_lock()
         self._update_status()
+
+    def show_chat(self, chat_id: int):
+        """Select and open a chat in the window (for a message that came from Telegram)."""
+        self.chat_list.reload(select_id=chat_id)
+        if chat_id != self.chat_id:
+            self.open_chat(chat_id)
 
     def _on_selection_changed(self):
         if self.chat_id is not None:
@@ -314,28 +324,36 @@ class MainWindow(QMainWindow):
     # --- sending and streaming ---
 
     def on_submit(self, text: str):
-        picked = list(self.chat_view.pending)
+        self.submit(text, list(self.chat_view.pending))
+
+    def _refuse(self, text: str) -> str:
+        self.chat_view.set_status(text)
+        return text
+
+    def _telegram_policy(self, tool) -> str:
+        """Calls from Telegram never wait for the confirmation window: "ask" runs, "deny" stays blocked."""
+        policy = self.tools_panel.policy_for(tool)
+        return "auto" if policy == "ask" else policy
+
+    def submit(self, text: str, picked: list, telegram: int | None = None) -> str:
+        """Sends a message to the current chat and starts the reply; returns the reason if it was not sent.
+
+        telegram: the Telegram chat the message came from: the input field is left alone, confirmations are
+        approved automatically and the reply goes back there (TelegramBridge.finished)."""
         if self.stream:
-            return
+            return "A reply is already in progress"
         profile = self._bound_profile()
         if profile is None:
             name = self.selector.profile.currentText()
             profile = db.get_profile(name) if name else None
         if profile is None:
-            self.chat_view.set_status("Choose a model on the Model tab")
-            return
+            return self._refuse("Choose a model on the Model tab")
         conn = db.get_connection(profile["connection"]) if profile["connection"] else None
         if conn is None:
-            self.chat_view.set_status(
-                f"Profile \"{profile['name']}\" has no connection. Choose one in Model Builder."
-            )
-            return
+            return self._refuse(f"Profile \"{profile['name']}\" has no connection. Choose one in Model Builder.")
         bundle = self.files_panel.load_bundle()
         if bundle.truncated:
-            self.chat_view.set_status(
-                "Too many files or too much content selected. Reduce the selection on the Files tab."
-            )
-            return
+            return self._refuse("Too many files or too much content selected. Reduce the selection on the Files tab.")
 
         enabled = self.tools_panel.enabled_tools()
         agents = self.tools_panel.enabled_agents()
@@ -347,8 +365,7 @@ class MainWindow(QMainWindow):
         candidate.append({"role": "user", "content": images.user_content(text, picked)})
         overflow = self._context_overflow(conn, profile, candidate, meta)
         if overflow:
-            self.chat_view.set_status(overflow)
-            return
+            return self._refuse(overflow)
 
         if self.chat_id is None:
             self.new_chat()
@@ -360,11 +377,13 @@ class MainWindow(QMainWindow):
         if chat["profile"] != profile["name"]:
             db.set_chat_profile(self.chat_id, profile["name"])
         db.add_message(self.chat_id, "user", text, images=images.encode_paths(picked))
-        self.chat_view.input.clear()
-        self.chat_view.clear_pending()
+        if telegram is None:
+            self.chat_view.input.clear()
+            self.chat_view.clear_pending()
         self.chat_view.append_message("user", text, image_paths=picked)
 
-        router = ToolRouter(self.tools_panel.router_manager, catalog, policy_for=self.tools_panel.effective_policy) if catalog else None
+        policy = self._telegram_policy if telegram is not None else self.tools_panel.effective_policy
+        router = ToolRouter(self.tools_panel.router_manager, catalog, policy_for=policy) if catalog else None
         messages = build_messages(
             profile, db.list_messages(self.chat_id), bundle.files, self._tools_text(profile, catalog, agents)
         )
@@ -380,7 +399,7 @@ class MainWindow(QMainWindow):
         if router is not None:
             router.confirm = lambda tool_id, args, cancel=thread.cancel_event: self.broker.ask(tool_id, args, cancel)
             if agents:
-                router.delegate = self._delegator(thread, Catalog(enabled) if enabled else None, agents)
+                router.delegate = self._delegator(thread, Catalog(enabled) if enabled else None, agents, policy)
         self.last_requests[self.chat_id] = {
             "url": conn["url"], "model": profile["base_model"], "temperature": profile["temperature"],
             "max_tokens": profile["max_tokens"], "messages": messages,
@@ -398,7 +417,7 @@ class MainWindow(QMainWindow):
         self.stream = {
             "id": self._stream_seq, "chat_id": self.chat_id, "thread": thread,
             "content": "", "reasoning": "", "notice": "", "rounds": 0, "key": key,
-            "files": len(bundle.files), "skipped": len(bundle.skipped),
+            "files": len(bundle.files), "skipped": len(bundle.skipped), "telegram": telegram,
         }
         self._threads.add(thread)
         self.chat_view.begin_live()
@@ -407,8 +426,9 @@ class MainWindow(QMainWindow):
         self._update_status()
         self.chat_list.reload(select_id=self.chat_id)
         thread.start()
+        return ""
 
-    def _delegator(self, thread: ChatStreamer, catalog: Catalog | None, agents: list):
+    def _delegator(self, thread: ChatStreamer, catalog: Catalog | None, agents: list, policy=None):
         """delegate(agent, task) for this reply: runs in the reply thread, waits for the subagent and returns its result.
 
         The subagent gets the chat's tools and permissions (auto-approve included), the same Stop button, and asks for
@@ -422,7 +442,7 @@ class MainWindow(QMainWindow):
                 return f"there is no agent \"{name}\". Agents: {names}.", True
             profile = db.get_profile(profile["name"]) or profile  # the profile may have been edited since the reply started
             setup = subagent.Setup(
-                manager=self.tools_panel.router_manager, catalog=catalog, policy_for=self.tools_panel.effective_policy,
+                manager=self.tools_panel.router_manager, catalog=catalog, policy_for=policy or self.tools_panel.effective_policy,
                 confirm=lambda who, tool_id, args: self.broker.ask(tool_id, args, thread.cancel_event, who=who),
                 tools_text=lambda p: self._tools_text(p, catalog), cancel=thread.cancel_event,
                 progress=lambda text: thread.progress.emit(sid, text),
@@ -493,6 +513,11 @@ class MainWindow(QMainWindow):
             for r in results
         ]
         db.add_messages(s["chat_id"], rows)
+        if s.get("telegram") is not None:  # a generated picture goes to Telegram right away
+            for r in results:
+                path = imagegen.result_path(str(r["content"]))
+                if path:
+                    self.telegram.photo(s["telegram"], path)
         s["content"] = s["reasoning"] = ""  # the next part of the reply accumulates from here
         s["rounds"] += 1
         if s["chat_id"] == self.chat_id:
@@ -553,6 +578,8 @@ class MainWindow(QMainWindow):
             db.add_message(s["chat_id"], "system", note)
             if s["chat_id"] == self.chat_id:
                 self.chat_view.append_message("system", note)
+        if s.get("telegram") is not None:
+            self.telegram.finished(s["telegram"], s["content"], note)
         self.chat_view.set_busy(False)
         self._update_status()
         self._refresh_context_info()

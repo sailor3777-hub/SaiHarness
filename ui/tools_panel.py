@@ -5,9 +5,8 @@ from pathlib import Path
 import json
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem, QPushButton, QLabel, QMenu, QComboBox, QLineEdit, QCheckBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QMenu, QComboBox, QLineEdit, QCheckBox,
     QScrollArea, QSplitter, QToolButton, QWidgetAction,
 )
 
@@ -16,43 +15,20 @@ from core import imagegen, vision
 from core.connection import normalize_url
 from core.vision import VISION_PROFILE_KEY
 from core.mcp_manager import McpManager, ServerState, ToolInfo, load_config
-from core.tools import (DEFAULT_CHAT_TOOLS, TOOL_GROUPS, OTHER_GROUP, Catalog, default_policy, meta_tools_tokens,
-                         schema_tokens, tool_group, with_requirements)
+from core.tools import DEFAULT_CHAT_TOOLS, Catalog, default_policy, meta_tools_tokens, schema_tokens, with_requirements
 from core.files import estimate_tokens
 from ui import themes
+from ui.tool_tree import CHECK, ID_ROLE, KIND_ROLE, ToolTree, _leaf_ids, _walk  # noqa: F401 (re-exported for tests)
 from worker import AsyncCall
 
-ID_ROLE, KIND_ROLE = Qt.UserRole, Qt.UserRole + 1  # KIND: 'server' | 'group' | 'tool' | 'note'
 log = logging.getLogger(__name__)
-
-
-def _dim() -> QBrush:
-    return QBrush(QColor(themes.current().dim))
-
-
-def _err() -> QBrush:
-    return QBrush(QColor(themes.current().tool_error))
 
 
 POLICY_TAGS = {"ask": "  [asks]", "deny": "  [blocked]", "auto": ""}
 POLICY_NAMES = {"auto": "Run without asking", "ask": "Ask for confirmation", "deny": "Block"}
-CHECK = {True: Qt.Checked, False: Qt.Unchecked}
 AUTO_APPROVE_KEY = "auto_approve"  # app_settings: "1" = calls that ask for confirmation run without the window
 AUTO_APPROVE_WARNING = "Auto-approve is on: write tools, shell_run and web_extract run without asking."
 SPLIT_KEY = "tools_split"  # app_settings: heights of the tool tree and the settings below it (JSON list)
-
-
-def _walk(item: QTreeWidgetItem):
-    """All items below item (depth first)."""
-    for i in range(item.childCount()):
-        child = item.child(i)
-        yield child
-        yield from _walk(child)
-
-
-def _leaf_ids(item: QTreeWidgetItem) -> list[str]:
-    """ids of the tools below a server or group item."""
-    return [it.data(0, ID_ROLE) for it in _walk(item) if it.data(0, KIND_ROLE) == "tool"]
 
 
 class ToolsPanel(QWidget):
@@ -60,6 +36,15 @@ class ToolsPanel(QWidget):
 
     selection_changed = Signal()  # the user changed the set of enabled tools or agents
     catalog_changed = Signal()    # servers were (re)connected
+
+    @property
+    def enabled(self) -> set[str]:
+        """The chat's enabled tool ids (held by the tree)."""
+        return self.tree.checked
+
+    @enabled.setter
+    def enabled(self, ids):
+        self.tree.checked = set(ids)
 
     def __init__(self, manager: McpManager, config_path: Path, auto_connect: bool = True, agent=None):
         super().__init__()
@@ -72,13 +57,11 @@ class ToolsPanel(QWidget):
             self.router_manager = CompositeManager(manager, agent)
         else:
             self.router_manager = manager
-        self.enabled: set[str] = set()
         self.agents: set[str] = set()  # names of the profiles the chat's model may delegate to
         self.main_profile = lambda: None  # the chat's profile (set by the window): for the "model reload" warning
         self.policies: dict[str, str] = db.load_tool_policies()
         self.tools: list[ToolInfo] = []
         self.states: dict[str, ServerState] = {}
-        self._updating = False
         self._error = ""
 
         self.reconnect_btn = QPushButton("Restart")
@@ -93,8 +76,9 @@ class ToolsPanel(QWidget):
         self.auto_warning = QLabel(AUTO_APPROVE_WARNING)
         self.auto_warning.setObjectName("status")
         self.auto_warning.setWordWrap(True)
-        self.tree = QTreeWidget()
-        self.tree.setHeaderLabel("MCP servers and tools")
+        self.tree = ToolTree("MCP servers and tools", tag=lambda t: POLICY_TAGS[self.policy_for(t)],
+                             tooltip=lambda t: f"{t.description}\n\nPermissions: {POLICY_NAMES[self.policy_for(t)]}\n"
+                                               "Right-click: change permissions.")
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.info = QLabel("")
         self.info.setWordWrap(True)
@@ -196,7 +180,7 @@ class ToolsPanel(QWidget):
         self.connect_req.busy_changed.connect(lambda busy: self.reconnect_btn.setEnabled(not busy))
         self.reconnect_btn.clicked.connect(self.connect_servers)
         self.config_btn.clicked.connect(self._open_config)
-        self.tree.itemChanged.connect(self._on_item_changed)
+        self.tree.toggled.connect(self._on_tree_toggled)
         self.auto_approve.toggled.connect(self._on_auto_approve)
         themes.bus.changed.connect(lambda _theme: self._update_auto_view())
         self._update_auto_view()
@@ -430,19 +414,7 @@ class ToolsPanel(QWidget):
         self.auto_warning.setVisible(self.auto_approve.isChecked())
         self.auto_warning.setStyleSheet(f"color: {themes.current().tool_error};")
 
-    def _on_item_changed(self, item: QTreeWidgetItem, _column: int):
-        if self._updating:
-            return
-        kind, ident = item.data(0, KIND_ROLE), item.data(0, ID_ROLE)
-        checked = item.checkState(0) == Qt.Checked
-        if kind == "tool":
-            (self.enabled.add if checked else self.enabled.discard)(ident)
-        elif kind in ("server", "group"):
-            ids = set(_leaf_ids(item))
-            self.enabled = (self.enabled | ids) if checked else (self.enabled - ids)
-        else:
-            return
-        self._sync()
+    def _on_tree_toggled(self):
         self._render()
         self.selection_changed.emit()
 
@@ -478,86 +450,11 @@ class ToolsPanel(QWidget):
     # --- tree ---
 
     def _rebuild(self):
-        expanded = {it.data(0, ID_ROLE) for it in _walk(self.tree.invisibleRootItem()) if it.isExpanded()}
-        first = self.tree.topLevelItemCount() == 0
-        self._updating = True
-        self.tree.clear()
-        for name, state in self.states.items():
-            top = QTreeWidgetItem(self.tree)
-            top.setData(0, ID_ROLE, name)
-            top.setData(0, KIND_ROLE, "server")
-            if state.status == "ready":
-                top.setText(0, f"● {name} — tools: {len(state.tools)}")
-                top.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
-                top.setCheckState(0, Qt.Unchecked)
-                groups: dict[str, list[ToolInfo]] = {}
-                for t in state.tools:
-                    groups.setdefault(tool_group(t), []).append(t)
-                order = [g for g in (*TOOL_GROUPS, OTHER_GROUP) if g in groups]
-                if len(order) == 1:  # a server with one kind of tools: no extra level
-                    self._add_tools(top, groups[order[0]])
-                for group in order if len(order) > 1 else ():
-                    item = QTreeWidgetItem(top)
-                    item.setData(0, ID_ROLE, f"{name}/{group}")
-                    item.setData(0, KIND_ROLE, "group")
-                    item.setText(0, f"{group} ({len(groups[group])})")
-                    item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
-                    item.setCheckState(0, Qt.Unchecked)
-                    self._add_tools(item, groups[group])
-                    item.setExpanded(f"{name}/{group}" in expanded)
-            elif state.status == "disabled":
-                top.setText(0, f"○ {name} — disabled in the config")
-                top.setFlags(Qt.ItemIsEnabled)
-                top.setForeground(0, _dim())
-            else:
-                top.setText(0, f"✗ {name} — error")
-                top.setFlags(Qt.ItemIsEnabled)
-                top.setForeground(0, _err())
-                note = QTreeWidgetItem(top, [state.error or "unknown error"])
-                note.setData(0, KIND_ROLE, "note")
-                note.setFlags(Qt.ItemIsEnabled)
-                note.setForeground(0, _dim())
-                top.setExpanded(True)
-            if first or name in expanded:
-                top.setExpanded(True)
-        self._updating = False
-        self._sync()
+        self.tree.set_states(self.states)
         self._render()
 
-    def _add_tools(self, parent: QTreeWidgetItem, tools: list[ToolInfo]):
-        for t in tools:
-            child = QTreeWidgetItem(parent, [t.name + POLICY_TAGS[self.policy_for(t)]])
-            child.setData(0, ID_ROLE, t.id)
-            child.setData(0, KIND_ROLE, "tool")
-            child.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
-            child.setCheckState(0, Qt.Unchecked)
-            child.setToolTip(0, f"{t.description}\n\nPermissions: {POLICY_NAMES[self.policy_for(t)]}\n"
-                                "Right-click: change permissions.")
-
     def _sync(self):
-        self._updating = True
-        wanted = with_requirements(self.enabled)  # dependencies of enabled tools are checked even if they were not chosen
-
-        def sync(item: QTreeWidgetItem) -> tuple[int, int]:
-            """Sets the check marks below item and on item itself; returns (enabled, total) tools."""
-            if item.data(0, KIND_ROLE) == "tool":
-                state = item.data(0, ID_ROLE) in wanted
-                item.setCheckState(0, CHECK[state])
-                return int(state), 1
-            on = total = 0
-            for j in range(item.childCount()):
-                a, b = sync(item.child(j))
-                on, total = on + a, total + b
-            item.setCheckState(0, Qt.Checked if total and on == total else Qt.PartiallyChecked if on else Qt.Unchecked)
-            return on, total
-
-        try:
-            for i in range(self.tree.topLevelItemCount()):
-                top = self.tree.topLevelItem(i)
-                if top.flags() & Qt.ItemIsUserCheckable:
-                    sync(top)
-        finally:
-            self._updating = False
+        self.tree.sync()
 
     # --- size estimate ---
 

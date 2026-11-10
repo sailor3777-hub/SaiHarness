@@ -248,3 +248,126 @@ class ChatStreamer(QThread):
         except Exception as e:  # the thread must not die silently
             if not self._cancel.is_set():
                 self.failed.emit(self.stream_id, f"Error: {e}")
+
+
+class TelegramService(QObject):
+    """The Telegram bot's network side: a polling thread (getUpdates) and a sending thread with a queue.
+
+    Both are daemon threads: a long poll that hangs for up to a minute never holds the window on closing. Updates from
+    users not in `allowed` are dropped here (only logged); pictures of allowed users are downloaded here too, so the
+    UI thread never waits for the network. post(fn) runs fn(api) in the sending thread, in order.
+    """
+
+    received = Signal(object)          # core.telegram.parse_update dict; a picture arrives as bytes in "image"
+    state_changed = Signal(bool, str)  # running, status text
+    log = Signal(str)
+
+    RETRY_SECONDS = 5
+
+    def __init__(self, api_factory=None, parent=None):
+        super().__init__(parent)
+        from core import telegram
+        self._tg = telegram
+        self._factory = api_factory or telegram.BotApi
+        self.allowed: set[int] = set()
+        self.username = ""
+        self._api = None
+        self._stop: threading.Event | None = None
+        self._queue = None
+        self._offset = 0  # kept across restarts: updates already handled are not delivered again
+
+    @property
+    def running(self) -> bool:
+        return self._stop is not None and not self._stop.is_set()
+
+    def start(self, token: str):
+        import queue
+        if self.running:
+            return
+        if not token.strip():
+            self.state_changed.emit(False, "Enter the bot token")
+            return
+        self._api = self._factory(token)
+        self._stop = threading.Event()
+        self._queue = queue.Queue()
+        stop, api, q = self._stop, self._api, self._queue
+        threading.Thread(target=self._poll, args=(api, stop), daemon=True, name="telegram-poll").start()
+        threading.Thread(target=self._send_loop, args=(api, stop, q), daemon=True, name="telegram-send").start()
+        self.state_changed.emit(True, "Connecting…")
+
+    def stop(self):
+        if not self.running:
+            return
+        self._stop.set()
+        self._queue.put(None)
+        api = self._api
+        threading.Thread(target=api.close, daemon=True).start()  # breaks the long poll that is waiting right now
+        self.state_changed.emit(False, "Stopped")
+
+    def post(self, fn):
+        """Run fn(api) in the sending thread (after the messages queued before it)."""
+        if self.running:
+            self._queue.put(fn)
+
+    def _poll(self, api, stop: threading.Event):
+        tg = self._tg
+        try:
+            me = api.get_me()
+            self.username = me.get("username", "")
+            api.set_commands()
+        except tg.TelegramError as e:
+            if not stop.is_set():
+                stop.set()
+                self._queue.put(None)
+                self.state_changed.emit(False, f"Could not start: {e}")
+            return
+        self.state_changed.emit(True, f"Running as @{self.username}")
+        while not stop.is_set():
+            try:
+                updates = api.get_updates(self._offset)
+            except tg.TelegramError as e:
+                if stop.is_set():
+                    return
+                self.log.emit(f"Polling error, retrying in {self.RETRY_SECONDS} s: {e}")
+                stop.wait(self.RETRY_SECONDS)
+                continue
+            for update in updates:
+                if stop.is_set():
+                    return
+                self._offset = max(self._offset, update.get("update_id", 0) + 1)
+                try:
+                    self._handle(api, update)
+                except Exception as e:  # one bad update must not stop the bot
+                    self.log.emit(f"Could not handle an update: {e}")
+
+    def _handle(self, api, update: dict):
+        tg = self._tg
+        item = tg.parse_update(update)
+        if item is None:
+            return
+        if item["user_id"] not in self.allowed:
+            name = f" (@{item['username']})" if item["username"] else ""
+            self.log.emit(f"Rejected a message from user {item['user_id']}{name}: not in the allowed list")
+            return
+        if item["kind"] == "message" and item["stale"]:
+            self.log.emit(f"Skipped an old message from {item['user_id']} (sent while the bot was off)")
+            return
+        if item["kind"] == "message" and item["photo"]:
+            try:
+                item["image"] = api.download(item["photo"])
+            except tg.TelegramError as e:
+                self.log.emit(f"Could not download a picture: {e}")
+                item["image"] = b""
+        self.received.emit(item)
+
+    def _send_loop(self, api, stop: threading.Event, q):
+        while True:
+            fn = q.get()
+            if fn is None or stop.is_set():
+                return
+            try:
+                fn(api)
+            except self._tg.TelegramError as e:
+                self.log.emit(f"Sending failed: {e}")
+            except Exception as e:  # the thread must not die silently
+                self.log.emit(f"Sending failed: {e}")

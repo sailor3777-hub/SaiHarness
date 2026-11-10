@@ -16,6 +16,7 @@ from ui.agent_panel import AgentPanel
 from ui.connection_panel import ConnectionPanel
 from ui.files_panel import FilesPanel
 from ui.memory_panel import MemoryPanel
+from ui.telegram_panel import TelegramPanel
 from ui.tools_panel import ToolsPanel
 from ui.web_panel import WebPanel
 from worker import ModelListRequest
@@ -334,6 +335,10 @@ class ContextPanel(QWidget):
         self.agent_panel = AgentPanel(self.agent, self._identity)
         tabs.addTab(self.agent_panel, "Agent")
 
+        self.telegram_panel = TelegramPanel()
+        tabs.addTab(self.telegram_panel, "Telegram")
+        self.tools_panel.catalog_changed.connect(lambda: self.telegram_panel.set_states(self.tools_panel.states))
+
         self.model_selector = ModelSelector()
         tabs.addTab(self.model_selector, "Model")
 
@@ -361,6 +366,7 @@ class ContextPanel(QWidget):
 
     def shutdown(self):
         """Wait for background requests before closing the window."""
+        self.telegram_panel.service.stop()
         self.builder.wait_threads()
         self.connections.wait_threads()
         self.files_panel.wait_threads()
