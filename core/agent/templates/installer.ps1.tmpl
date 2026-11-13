@@ -37,6 +37,12 @@ Set-Content -Path (Join-Path $InstallDir 'agent.json') -Value $Config -Encoding 
 # One-time token (removed by the agent after it enrolls).
 Set-Content -Path (Join-Path $InstallDir 'enroll_token.txt') -Value $EnrollToken -Encoding ascii
 
+# The uninstaller, kept next to the agent for later.
+$Uninstaller = @'
+{{UNINSTALL_PS1}}
+'@
+Set-Content -Path (Join-Path $InstallDir 'uninstall.ps1') -Value $Uninstaller -Encoding ascii
+
 # Unpack the embedded agent package.
 Remove-Item -Recurse -Force $PkgDir -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $PkgDir | Out-Null
@@ -125,5 +131,6 @@ try {
 Write-Host "Installed agent '$AgentName' -> $MainAddress"
 Write-Host "Starting now; it will enroll once with the one-time token and then stay connected."
 Write-Host "Logs: $InstallDir\agent.log (and agent.err.log for startup crashes)."
+Write-Host "To remove it later: powershell -ExecutionPolicy Bypass -File `"$InstallDir\uninstall.ps1`""
 # pythonw has no console; redirect stderr so a startup crash is still visible.
 Start-Process -FilePath $Pythonw -ArgumentList $RunArgs -RedirectStandardError (Join-Path $InstallDir 'agent.err.log')

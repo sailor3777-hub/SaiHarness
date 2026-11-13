@@ -91,6 +91,49 @@ check("without winget the installer falls back to the signed python.org installe
       "Get-Command winget" in script and "https://www.python.org/ftp/python/" in script
       and "Get-AuthenticodeSignature" in script and "O=Python Software Foundation" in script)
 
+# --- the uninstaller ---------------------------------------------------------
+uninst = installer.uninstaller_text()
+check("uninstaller is plain ASCII", uninst.isascii())
+check("installer embeds the uninstaller and saves it to the install folder",
+      f"$Uninstaller = @'\n{uninst}\n'@" in script and "'uninstall.ps1'" in script)
+_ps = Path(tempfile.mkdtemp(prefix="sai_uninst_"))
+(_ps / "installer.ps1").write_text(script, encoding="utf-8-sig")
+_written = installer.write_uninstaller(_ps)
+check("write_uninstaller writes uninstall_agent.ps1", _written.name == "uninstall_agent.ps1"
+      and _written.read_text(encoding="ascii").rstrip() == uninst)
+_parse = ("$bad = 0; foreach ($f in $args) { $e = $null; "
+          "[void][System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$null, [ref]$e); "
+          "foreach ($x in $e) { Write-Output \"$f : $($x.Message)\"; $bad++ } }; exit $bad")
+proc = subprocess.run(["powershell", "-NoProfile", "-Command", "& {" + _parse + "}",
+                       str(_ps / "installer.ps1"), str(_written)], capture_output=True, text=True)
+check("installer and uninstaller parse in PowerShell without errors", proc.returncode == 0, proc.stdout + proc.stderr)
+
+
+def run_uninstaller(install_dir):
+    return subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(_written),
+                           "-Yes", "-InstallDir", str(install_dir)], capture_output=True, text=True, timeout=60)
+
+
+# A fake install: the folder layout and an "agent" process started from it (it only sleeps). Scheduled tasks are
+# matched by the install folder, so the real ones on this machine are never touched.
+_inst = _ps / "SaiHarnessAgent"
+(_inst / "pkg" / "core" / "agent").mkdir(parents=True)
+(_inst / "pkg" / "core" / "agent" / "agent_host.py").write_text("import time\ntime.sleep(120)\n", encoding="utf-8")
+(_inst / "agent.json").write_text('{"name": "alpha", "address": "x:1", "roots": []}', encoding="utf-8-sig")
+_fake = subprocess.Popen([sys.executable, str(_inst / "pkg" / "core" / "agent" / "agent_host.py"), "--dir", str(_inst)])
+time.sleep(0.5)
+proc = run_uninstaller(_inst)
+check("uninstaller succeeds", proc.returncode == 0, proc.stdout + proc.stderr)
+check("uninstaller names the agent", "'alpha'" in proc.stdout, proc.stdout)
+check("uninstaller stops the running agent", wait_until(lambda: _fake.poll() is not None, 10))
+check("uninstaller deletes the install folder", not _inst.exists())
+if _fake.poll() is None:
+    _fake.kill()
+proc = run_uninstaller(_inst)
+check("uninstaller on a clean host does nothing", proc.returncode == 0 and "Nothing to do" in proc.stdout,
+      proc.stdout + proc.stderr)
+shutil.rmtree(_ps, ignore_errors=True)
+
 # --- core.files does not import core.docs at import time -------------------
 proc = subprocess.run([sys.executable, "-c", "import core.files, sys; print('core.docs' in sys.modules)"],
                       capture_output=True, text=True)

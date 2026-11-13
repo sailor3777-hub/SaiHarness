@@ -48,6 +48,7 @@ check("create_agent returns a token", bool(token))
 script = Path(out).read_text(encoding="utf-8")
 check("installer file was written with token, address and CA",
       token in script and "10.0.0.5:8765" in script and "BEGIN CERTIFICATE" in script)
+check("the uninstaller is saved next to the installer", (tmp / "uninstall_agent.ps1").is_file())
 
 with sqlite3.connect(db.DB_PATH) as conn:
     reg = Registry(conn)

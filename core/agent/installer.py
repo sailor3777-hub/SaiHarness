@@ -18,7 +18,26 @@ import zipfile
 from pathlib import Path
 
 TEMPLATE = Path(__file__).resolve().parent / "templates" / "installer.ps1.tmpl"
+# A plain script, the same for every agent: the installer leaves a copy in the install folder, and the Agent tab
+# writes one next to each installer (for hosts installed before the installer carried it).
+UNINSTALLER = Path(__file__).resolve().parent / "templates" / "uninstall.ps1"
+UNINSTALLER_NAME = "uninstall_agent.ps1"
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def uninstaller_text() -> str:
+    text = UNINSTALLER.read_text(encoding="utf-8")
+    # It goes into the installer as a single-quoted here-string, which a line starting with '@ would end.
+    if any(line.startswith("'@") for line in text.splitlines()):
+        raise ValueError("uninstall.ps1 must not have a line starting with '@")
+    return text.rstrip()
+
+
+def write_uninstaller(folder) -> Path:
+    """Write the uninstaller into a folder (next to the installers); returns its path."""
+    path = Path(folder) / UNINSTALLER_NAME
+    path.write_text(uninstaller_text() + "\n", encoding="ascii")
+    return path
 
 # The slim host package: just what the wrapper needs. Deliberately excludes
 # core/docs.py (and its pypdf/python-docx deps): files.py imports it lazily and
@@ -58,4 +77,5 @@ def render(address: str, ca_cert_pem, token: str, name: str,
             .replace("{{ENROLLMENT_TOKEN}}", token)
             .replace("{{CA_CERT_PEM}}", ca_text.strip())
             .replace("{{PACKAGE_B64}}", pkg_b64)
+            .replace("{{UNINSTALL_PS1}}", uninstaller_text())  # last: fixed text, never substituted itself
     )

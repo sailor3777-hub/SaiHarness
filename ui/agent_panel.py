@@ -118,6 +118,7 @@ class AgentPanel(QWidget):
                 _, token = enroll.create_agent(reg, name)
         script = installer.render(self._installer_address(), self.identity["ca_cert_pem"], token, name)
         Path(out_path).write_text(script, encoding="utf-8")
+        installer.write_uninstaller(Path(out_path).parent)
         return token
 
     def revoke(self, agent_id: int) -> bool:
@@ -205,7 +206,9 @@ class AgentPanel(QWidget):
         QMessageBox.information(
             self, "Agent created",
             f"Installer written to:\n{out_path}\n\nRun it on the target host. One-time enrollment token:\n\n{token}\n\n"
-            "The token works once and is not stored in full.",
+            "The token works once and is not stored in full.\n\n"
+            f"To remove the agent from a host later, run {installer.UNINSTALLER_NAME} there "
+            "(saved next to the installer; the installer also leaves uninstall.ps1 in the agent's folder).",
         )
 
     def _revoke_selected(self):
@@ -224,7 +227,10 @@ class AgentPanel(QWidget):
         name = item.text(0)
         if QMessageBox.question(self, "Delete agent",
                                 f"Delete \"{name}\"? It is disconnected and removed from the list; "
-                                "the host must be reinstalled to connect again.") == QMessageBox.Yes:
+                                "the host must be reinstalled to connect again.\n\n"
+                                "This does not touch the host itself: to remove the agent there, run "
+                                f"{installer.UNINSTALLER_NAME} on it (it is saved next to the installers, "
+                                "and a copy is in %LOCALAPPDATA%\\SaiHarnessAgent\\uninstall.ps1).") == QMessageBox.Yes:
             self.delete(item.data(0, ID_ROLE))
 
     def showEvent(self, event):
